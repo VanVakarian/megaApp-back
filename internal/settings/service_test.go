@@ -469,9 +469,6 @@ func TestMetricsSettingsDefaultsAndRoundTrip(t *testing.T) {
 	batch := map[string]any{
 		"cardSize":             map[string]any{"widthPx": 400, "heightPx": 150, "expandedHeightPx": 500},
 		"syncCrosshairEnabled": true,
-		"compositeMetrics": []any{
-			map[string]any{"id": "c1", "metricName": "latency", "serviceA": "a", "serviceB": "b"},
-		},
 	}
 	if _, _, err := service.Put(context.Background(), userID, NamespaceMetrics, "op-1", rawFields(t, batch)); err != nil {
 		t.Fatalf("Put() error = %v", err)
@@ -489,9 +486,6 @@ func TestMetricsSettingsDefaultsAndRoundTrip(t *testing.T) {
 	}
 	if !metrics.SyncCrosshairEnabled {
 		t.Fatal("SyncCrosshairEnabled = false, want true")
-	}
-	if len(metrics.CompositeMetrics) != 1 || metrics.CompositeMetrics[0].ID != "c1" {
-		t.Fatalf("CompositeMetrics = %v, want one entry with id c1", metrics.CompositeMetrics)
 	}
 }
 

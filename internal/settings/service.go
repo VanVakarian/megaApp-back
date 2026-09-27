@@ -94,14 +94,6 @@ type SeverityThresholds struct {
 	ErrorAfterSeconds float64 `json:"errorAfterSeconds"`
 }
 
-type CompositeMetricDefinition struct {
-	ID                 string `json:"id"`
-	MetricName         string `json:"metricName"`
-	ServiceA           string `json:"serviceA"`
-	ServiceB           string `json:"serviceB"`
-	TreatMissingAsZero *bool  `json:"treatMissingAsZero,omitempty"`
-}
-
 type ServiceCustomLabel struct {
 	Short string `json:"short"`
 	Long  string `json:"long"`
@@ -137,7 +129,6 @@ type MetricsSettings struct {
 	SeverityThresholds        map[string]SeverityThresholds `json:"severityThresholds"`
 	ServiceHeaderVisibility   map[string]bool               `json:"serviceHeaderVisibility"`
 	ServiceCustomLabels       map[string]ServiceCustomLabel `json:"serviceCustomLabels"`
-	CompositeMetrics          []CompositeMetricDefinition   `json:"compositeMetrics"`
 	AnomalyCorridorPercent    float64                       `json:"anomalyCorridorPercent"`
 }
 
@@ -150,7 +141,6 @@ func defaultMetricsSettings() *MetricsSettings {
 		SeverityThresholds:        map[string]SeverityThresholds{},
 		ServiceHeaderVisibility:   map[string]bool{},
 		ServiceCustomLabels:       map[string]ServiceCustomLabel{},
-		CompositeMetrics:          []CompositeMetricDefinition{},
 		AnomalyCorridorPercent:    95,
 	}
 }

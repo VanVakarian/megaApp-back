@@ -28,21 +28,35 @@ func ApplyMigrations(ctx context.Context, db *sql.DB, migrationsDir string) erro
 	}
 
 	appliedCount := 0
+	skippedCount := 0
+	var firstSkipped, lastSkipped string
+	logSkipped := func() {
+		if skippedCount > 0 {
+			log.Printf("%d migrations already applied, skipped: %s .. %s", skippedCount, firstSkipped, lastSkipped)
+			skippedCount = 0
+		}
+	}
 	for _, migration := range migrations {
 		applied, err := isApplied(ctx, db, migration.Version)
 		if err != nil {
 			return err
 		}
 		if applied {
-			log.Printf("migration %s already applied, skipping", migration.Name)
+			if skippedCount == 0 {
+				firstSkipped = migration.Name
+			}
+			lastSkipped = migration.Name
+			skippedCount++
 			continue
 		}
+		logSkipped()
 		if err := applyMigration(ctx, db, migration); err != nil {
 			return err
 		}
 		log.Printf("migration %s applied", migration.Name)
 		appliedCount++
 	}
+	logSkipped()
 
 	log.Printf("migrations check complete: %d total, %d newly applied", len(migrations), appliedCount)
 	return nil

@@ -161,6 +161,14 @@ func (s *Service) GetUserByID(ctx context.Context, userID int64) (*User, error) 
 	return s.repo.GetUserByID(ctx, userID)
 }
 
+func (s *Service) IsAdmin(ctx context.Context, userID int64) (bool, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return false, err
+	}
+	return user.IsAdmin, nil
+}
+
 func (s *Service) newSession(ctx context.Context, user *User) (LoginResult, error) {
 	id, err := randomValue(24)
 	if err != nil {

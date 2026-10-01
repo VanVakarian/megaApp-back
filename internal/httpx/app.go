@@ -95,7 +95,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, clk clo
 		_ = db.Close()
 		return nil, err
 	}
-	foodModule, err := buildFoodModule(db.Read(), db.Write(), cfg, logger, wsModule.hub, clk, metricsModule.service)
+	foodModule, err := buildFoodModule(db.Read(), db.Write(), cfg, logger, wsModule.hub, authModule.service, clk, metricsModule.service)
 	if err != nil {
 		_ = metricsModule.poller.Close()
 		_ = metricsModule.processSampler.Close()

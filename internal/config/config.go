@@ -25,7 +25,6 @@ type Config struct {
 	SessionRenewWindow                  time.Duration
 	OpenRouterAPIKey                    string
 	OpenRouterModel                     string
-	OpenRouterVisionModel               string
 	OpenRouterImageModel                string
 	OpenRouterTimeout                   time.Duration
 	ImageGenerationMaxAttempts          int
@@ -107,7 +106,6 @@ func Load() (Config, error) {
 		BackupsDir:                   getString("BACKUPS_DIR", "./backups"),
 		OpenRouterAPIKey:             getString("OPENROUTER_API_KEY", ""),
 		OpenRouterModel:              getString("OPENROUTER_MODEL", "google/gemini-2.5-pro"),
-		OpenRouterVisionModel:        getString("OPENROUTER_VISION_MODEL", "google/gemini-2.5-flash"),
 		OpenRouterImageModel:         getString("OPENROUTER_IMAGE_MODEL", "google/gemini-2.5-flash-image"),
 		OpenAIAPIKey:                 getString("OPENAI_API_KEY", ""),
 		OpenAIEmbeddingModel:         getString("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),

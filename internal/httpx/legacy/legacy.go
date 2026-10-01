@@ -13,6 +13,7 @@ type ErrorKind string
 const (
 	ErrorKindValidation      ErrorKind = "validation"
 	ErrorKindUnauthorized    ErrorKind = "unauthorized"
+	ErrorKindForbidden       ErrorKind = "forbidden"
 	ErrorKindNotFound        ErrorKind = "not_found"
 	ErrorKindConflict        ErrorKind = "conflict"
 	ErrorKindInternal        ErrorKind = "internal"
@@ -79,6 +80,8 @@ func ErrorStatusCodeOf(err error, fallback int) int {
 		return http.StatusBadRequest
 	case ErrorKindUnauthorized:
 		return http.StatusUnauthorized
+	case ErrorKindForbidden:
+		return http.StatusForbidden
 	case ErrorKindNotFound:
 		return http.StatusNotFound
 	case ErrorKindConflict:

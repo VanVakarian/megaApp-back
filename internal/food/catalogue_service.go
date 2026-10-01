@@ -23,18 +23,13 @@ type ProductPreviewData struct {
 	Confidence      float64 `json:"confidence"`
 }
 
-type VoiceAnalysisData struct {
-	DetectedProduct ProductPreviewData `json:"detectedProduct"`
-	SearchResults   []CatalogueEntry   `json:"searchResults"`
-}
-
 type scoredCatalogueEntry struct {
 	entry CatalogueEntry
 	score int
 }
 
 func (s *Service) SearchCatalogue(ctx context.Context, query string) ([]CatalogueEntry, error) {
-	ids, err := s.searchCatalogueIDs(ctx, query)
+	ids, err := s.searchCatalogueIDs(ctx, query, false)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +54,29 @@ func (s *Service) SearchCatalogue(ctx context.Context, query string) ([]Catalogu
 	return result, nil
 }
 
-func (s *Service) SearchCatalogueRealtime(ctx context.Context, query string) ([]int64, error) {
-	return s.searchCatalogueIDs(ctx, query)
+// SearchCatalogueRealtime serves the WS search. The archive mode is applied only for an admin;
+// for anyone else the request silently falls back to the normal mode. The returned flag is the
+// mode actually applied, so the client never mistakes one mode's results for the other's.
+func (s *Service) SearchCatalogueRealtime(ctx context.Context, userID int64, query string, archived bool) ([]int64, bool, error) {
+	if archived {
+		isAdmin, err := s.isAdmin(ctx, userID)
+		if err != nil {
+			return nil, false, err
+		}
+		archived = isAdmin
+	}
+	ids, err := s.searchCatalogueIDs(ctx, query, archived)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, archived, nil
+}
+
+func (s *Service) isAdmin(ctx context.Context, userID int64) (bool, error) {
+	if s.adminChecker == nil {
+		return false, nil
+	}
+	return s.adminChecker.IsAdmin(ctx, userID)
 }
 
 func (s *Service) GenerateProductPreview(ctx context.Context, query string) (ProductPreviewData, error) {
@@ -93,6 +109,18 @@ func (s *Service) peekIdempotency(ctx context.Context, userID int64, operationID
 }
 
 func (s *Service) SaveProduct(ctx context.Context, userID int64, operationID string, catalogueID *int64, input ProductInput) (entry *CatalogueEntry, applied bool, err error) {
+	// Only an admin may touch the archive flag. Checked before the idempotency peek so that a
+	// replayed operation cannot bypass it, and for any value of the flag (even an unchanged one).
+	if input.Archived != nil {
+		isAdmin, err := s.isAdmin(ctx, userID)
+		if err != nil {
+			return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to check permissions", err)
+		}
+		if !isAdmin {
+			return nil, false, legacy.NewError(legacy.ErrorKindForbidden, "Forbidden")
+		}
+	}
+
 	cachedJSON, found, err := s.peekIdempotency(ctx, userID, operationID)
 	if err != nil {
 		return nil, false, err
@@ -117,6 +145,24 @@ func (s *Service) SaveProduct(ctx context.Context, userID int64, operationID str
 			return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to look up product by name", err)
 		}
 
+		// All reads happen before the write transaction opens, so it only holds the writes.
+		if catalogueID == nil {
+			if existingByName != nil {
+				return nil, false, legacy.NewError(legacy.ErrorKindValidation, "product with this name already exists")
+			}
+		} else {
+			existingByID, err := s.repo.GetCatalogueEntry(ctx, *catalogueID)
+			if err != nil {
+				return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to load product", err)
+			}
+			if existingByID == nil {
+				return nil, false, legacy.NewError(legacy.ErrorKindNotFound, "product not found")
+			}
+			if existingByName != nil && existingByName.ID != *catalogueID {
+				return nil, false, legacy.NewError(legacy.ErrorKindValidation, "product with this name already exists")
+			}
+		}
+
 		nameVector, descriptionVector, err := s.generateProductEmbeddings(ctx, input)
 		if err != nil {
 			return nil, false, legacy.WrapError(legacy.ErrorKindExternal, "Failed to generate product embeddings", err)
@@ -130,29 +176,12 @@ func (s *Service) SaveProduct(ctx context.Context, userID int64, operationID str
 		}
 
 		if catalogueID == nil {
-			if existingByName != nil {
-				_ = tx.Rollback()
-				return nil, false, legacy.NewError(legacy.ErrorKindValidation, "product with this name already exists")
-			}
 			resultID, err = s.repo.CreateCatalogueEntry(ctx, tx, input)
 			if err != nil {
 				_ = tx.Rollback()
 				return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to create product", err)
 			}
 		} else {
-			existingByID, err := s.repo.GetCatalogueEntry(ctx, *catalogueID)
-			if err != nil {
-				_ = tx.Rollback()
-				return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to load product", err)
-			}
-			if existingByID == nil {
-				_ = tx.Rollback()
-				return nil, false, legacy.NewError(legacy.ErrorKindNotFound, "product not found")
-			}
-			if existingByName != nil && existingByName.ID != *catalogueID {
-				_ = tx.Rollback()
-				return nil, false, legacy.NewError(legacy.ErrorKindValidation, "product with this name already exists")
-			}
 			updated, err := s.repo.UpdateCatalogueEntry(ctx, tx, *catalogueID, input)
 			if err != nil {
 				_ = tx.Rollback()
@@ -258,31 +287,18 @@ func (s *Service) DeleteProduct(ctx context.Context, userID int64, operationID s
 	return deleted, true, nil
 }
 
-func (s *Service) AnalyzeVoiceTranscript(ctx context.Context, transcript string) (*VoiceAnalysisData, error) {
-	if strings.TrimSpace(transcript) == "" {
-		return nil, legacy.NewError(legacy.ErrorKindValidation, "Transcript is required")
-	}
-	if s.productGenerator == nil {
-		return nil, legacy.NewError(legacy.ErrorKindInternal, "Product generator is not configured")
-	}
-	preview, err := s.productGenerator.AnalyzeVoice(ctx, transcript)
-	if err != nil {
-		return nil, legacy.WrapError(legacy.ErrorKindExternal, "Failed to analyze voice transcript", err)
-	}
-	results, err := s.SearchCatalogue(ctx, preview.GeneralizedName)
-	if err != nil {
-		return nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to search catalogue", err)
-	}
-	return &VoiceAnalysisData{DetectedProduct: preview, SearchResults: results}, nil
-}
-
-func (s *Service) searchCatalogueIDs(ctx context.Context, query string) ([]int64, error) {
+// searchCatalogueIDs ranks the products of one mode: normal (archived == false) skips archived
+// products, archive mode returns only them. The results cache serves the normal mode only —
+// archive searches are rare, so they neither read nor write it.
+func (s *Service) searchCatalogueIDs(ctx context.Context, query string, archived bool) ([]int64, error) {
 	normalizedQuery := normalizeSearchText(query)
 	if normalizedQuery == "" {
 		return []int64{}, nil
 	}
-	if cached, ok := s.searchCache.Get(normalizedQuery); ok {
-		return cached, nil
+	if !archived {
+		if cached, ok := s.searchCache.Get(normalizedQuery); ok {
+			return cached, nil
+		}
 	}
 
 	catalogue, err := s.GetCatalogue(ctx)
@@ -300,6 +316,9 @@ func (s *Service) searchCatalogueIDs(ctx context.Context, query string) ([]int64
 	transliteratedTokens := splitSearchTokens(transliteratedQuery)
 	scored := make([]scoredCatalogueEntry, 0, len(catalogue))
 	for _, entry := range catalogue {
+		if entry.Archived != archived {
+			continue
+		}
 		score := scoreCatalogueEntry(entry, normalizedQuery, normalizedTokens, transliteratedQuery, transliteratedTokens)
 		score += semanticScores[entry.ID]
 		if score == 0 {
@@ -324,7 +343,9 @@ func (s *Service) searchCatalogueIDs(ctx context.Context, query string) ([]int64
 		ids = append(ids, item.entry.ID)
 	}
 
-	s.searchCache.Set(normalizedQuery, ids)
+	if !archived {
+		s.searchCache.Set(normalizedQuery, ids)
+	}
 	return ids, nil
 }
 

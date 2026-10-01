@@ -25,23 +25,8 @@ var fakeGeneratedProductPreview = ProductPreviewData{
 	Confidence:      0.9,
 }
 
-var fakeVoiceProductPreview = ProductPreviewData{
-	GeneralizedName: "Яблоко",
-	Kcals:           50,
-	Protein:         1,
-	Fat:             0,
-	Carbs:           10,
-	Fiber:           2,
-	Description:     "Fruit",
-	Confidence:      0.9,
-}
-
 func (fakeProductGenerator) GenerateProduct(ctx context.Context, description string) (ProductPreviewData, error) {
 	return fakeGeneratedProductPreview, nil
-}
-
-func (fakeProductGenerator) AnalyzeVoice(ctx context.Context, transcript string) (ProductPreviewData, error) {
-	return fakeVoiceProductPreview, nil
 }
 
 type fakeEmbeddingGenerator struct{}
@@ -1042,7 +1027,7 @@ func openFoodTestDB(t *testing.T) *sql.DB {
 		CREATE TABLE auth_sessions (id TEXT PRIMARY KEY, secretHash BLOB NOT NULL, userId INTEGER NOT NULL, createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL, renewedAt TEXT NOT NULL, revokedAt TEXT);
 		CREATE TABLE settings (id INTEGER PRIMARY KEY AUTOINCREMENT, usersId INTEGER, goal TEXT, darkTheme BOOLEAN, selectedChapterFood BOOLEAN, selectedChapterMoney BOOLEAN, liteVersion BOOLEAN, height INTEGER);
 		CREATE TABLE foodSettings (id INTEGER PRIMARY KEY AUTOINCREMENT, height INTEGER, useCoeffs BOOLEAN, coefficients TEXT, usersId INTEGER);
-		CREATE TABLE foodCatalogue (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, kcals INTEGER, protein REAL, fat REAL, carbs REAL, fiber REAL, description TEXT, legacyName TEXT, nameVec BLOB, descriptionVec BLOB);
+		CREATE TABLE foodCatalogue (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, kcals INTEGER, protein REAL, fat REAL, carbs REAL, fiber REAL, description TEXT, legacyName TEXT, nameVec BLOB, descriptionVec BLOB, archived INTEGER NOT NULL DEFAULT 0);
 		CREATE TABLE foodDiary (id INTEGER PRIMARY KEY AUTOINCREMENT, dateISO TEXT, foodCatalogueId INTEGER, foodWeight INTEGER, history TEXT, usersId INTEGER, ver INTEGER, del BOOLEAN);
 		CREATE TABLE foodBodyWeight (id INTEGER PRIMARY KEY AUTOINCREMENT, dateISO TEXT, weight NUMERIC, usersId INTEGER);
 		CREATE TABLE foodSearchQueryEmbeddings (query TEXT PRIMARY KEY, embedding BLOB, hitCount INTEGER, lastUsedAt INTEGER, createdAt INTEGER);

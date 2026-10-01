@@ -34,6 +34,7 @@ type CatalogueRow struct {
 	Carbs       sql.NullFloat64
 	Fiber       sql.NullFloat64
 	Description sql.NullString
+	Archived    bool
 }
 
 type StatsDiaryRow struct {
@@ -113,7 +114,7 @@ func (r *Repository) GetAllWeightEntries(ctx context.Context, userID int64) ([]W
 
 func (r *Repository) GetCatalogue(ctx context.Context) ([]CatalogueRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, kcals, protein, fat, carbs, fiber, description, legacyName
+		SELECT id, name, kcals, protein, fat, carbs, fiber, description, legacyName, archived
 		FROM foodCatalogue
 		ORDER BY name ASC
 	`)
@@ -125,7 +126,7 @@ func (r *Repository) GetCatalogue(ctx context.Context) ([]CatalogueRow, error) {
 	var result []CatalogueRow
 	for rows.Next() {
 		var row CatalogueRow
-		if err := rows.Scan(&row.ID, &row.Name, &row.Kcals, &row.Protein, &row.Fat, &row.Carbs, &row.Fiber, &row.Description, &row.LegacyName); err != nil {
+		if err := rows.Scan(&row.ID, &row.Name, &row.Kcals, &row.Protein, &row.Fat, &row.Carbs, &row.Fiber, &row.Description, &row.LegacyName, &row.Archived); err != nil {
 			return nil, fmt.Errorf("scan catalogue row: %w", err)
 		}
 		result = append(result, row)
@@ -140,13 +141,13 @@ func (r *Repository) GetCatalogue(ctx context.Context) ([]CatalogueRow, error) {
 
 func (r *Repository) GetCatalogueEntry(ctx context.Context, catalogueID int64) (*CatalogueRow, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, name, kcals, protein, fat, carbs, fiber, description, legacyName
+		SELECT id, name, kcals, protein, fat, carbs, fiber, description, legacyName, archived
 		FROM foodCatalogue
 		WHERE id = ?
 	`, catalogueID)
 
 	var result CatalogueRow
-	if err := row.Scan(&result.ID, &result.Name, &result.Kcals, &result.Protein, &result.Fat, &result.Carbs, &result.Fiber, &result.Description, &result.LegacyName); err != nil {
+	if err := row.Scan(&result.ID, &result.Name, &result.Kcals, &result.Protein, &result.Fat, &result.Carbs, &result.Fiber, &result.Description, &result.LegacyName, &result.Archived); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}

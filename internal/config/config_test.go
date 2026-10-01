@@ -18,7 +18,6 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("BACKUPS_DIR", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("OPENROUTER_MODEL", "")
-	t.Setenv("OPENROUTER_VISION_MODEL", "")
 	t.Setenv("OPENROUTER_IMAGE_MODEL", "")
 	t.Setenv("OPENROUTER_TIMEOUT_SECONDS", "")
 	t.Setenv("OPENAI_API_KEY", "")
@@ -103,9 +102,6 @@ func TestLoadUsesDefaults(t *testing.T) {
 	}
 	if cfg.OpenRouterModel != "google/gemini-2.5-pro" {
 		t.Fatalf("OpenRouterModel = %q, want google/gemini-2.5-pro", cfg.OpenRouterModel)
-	}
-	if cfg.OpenRouterVisionModel != "google/gemini-2.5-flash" {
-		t.Fatalf("OpenRouterVisionModel = %q, want google/gemini-2.5-flash", cfg.OpenRouterVisionModel)
 	}
 	if cfg.OpenRouterImageModel != "google/gemini-2.5-flash-image" {
 		t.Fatalf("OpenRouterImageModel = %q, want google/gemini-2.5-flash-image", cfg.OpenRouterImageModel)

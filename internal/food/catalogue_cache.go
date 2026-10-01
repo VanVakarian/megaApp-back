@@ -1,12 +1,17 @@
 package food
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // CatalogueCache holds the whole catalogue (minus per-entry ImageVersion, which is resolved
 // fresh on every read from ImageVersionProvider — cheap, in-memory, and lets image generation
 // stay decoupled from cache invalidation) plus a version counter. The counter only moves on an
 // actual write (Invalidate, called from SaveProduct/DeleteProduct) — it is the cheap "did the
 // shared catalogue change" signal GET /api/food/catalogue/version answers for reconnect catch-up.
+// It starts from the launch time in milliseconds, so a restart never rewinds it to a value a
+// client has already seen (writes between restarts are far fewer than milliseconds elapsed).
 type CatalogueCache struct {
 	mu      sync.RWMutex
 	version int64
@@ -14,7 +19,7 @@ type CatalogueCache struct {
 }
 
 func NewCatalogueCache() *CatalogueCache {
-	return &CatalogueCache{}
+	return &CatalogueCache{version: time.Now().UnixMilli()}
 }
 
 func (c *CatalogueCache) Get() (map[int64]CatalogueEntry, bool) {

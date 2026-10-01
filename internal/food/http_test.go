@@ -2,12 +2,9 @@ package food
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"net/textproto"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -205,7 +202,6 @@ func TestFoodSearchAndCatalogueMutationEndpoints(t *testing.T) {
 	authService := auth.NewService(authRepo, auth.SessionConfig{})
 	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
 	service.SetProductGenerator(fakeProductGenerator{})
-	service.SetImageAnalyzer(fakeImageAnalyzer{name: "Apple"})
 	hub := wspkg.NewHub(time.Second, wspkg.NewSyncState())
 	defer func() { _ = hub.Close() }()
 	clk := clockplatform.NewRealClock()
@@ -248,8 +244,6 @@ func TestFoodSearchAndCatalogueMutationEndpoints(t *testing.T) {
 
 	assertJSONRequestStatus(t, http.MethodGet, server.URL+"/api/food/search?query=apple-semantic", session.Cookie, "tab-a", nil, http.StatusOK)
 	assertJSONRequestStatus(t, http.MethodPost, server.URL+"/api/food/generate-product-preview", session.Cookie, "tab-a", map[string]any{"description": "apple-semantic"}, http.StatusOK)
-	assertJSONRequestStatus(t, http.MethodPost, server.URL+"/api/food/analyze-voice", session.Cookie, "tab-a", map[string]any{"transcript": "apple-semantic"}, http.StatusOK)
-	assertMultipartRequestStatus(t, server.URL+"/api/food/analyze-image", session.Cookie, "tab-a", []byte("fake-image-bytes"), http.StatusOK)
 	assertJSONRequestStatus(t, http.MethodPost, server.URL+"/api/food/save-product", session.Cookie, "tab-a", map[string]any{
 		"operationId": "op-save-orange",
 		"name":        "Orange",
@@ -593,50 +587,6 @@ func decodeJSONRequest(t *testing.T, method string, url string, sessionCookie st
 		t.Fatalf("Decode() error = %v", err)
 	}
 	return decoded
-}
-
-func assertMultipartRequestStatus(t *testing.T, url string, sessionCookie string, clientID string, fileData []byte, wantStatus int) {
-	t.Helper()
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	headers := make(textproto.MIMEHeader)
-	headers.Set("Content-Disposition", `form-data; name="image"; filename="photo.png"`)
-	headers.Set("Content-Type", "image/png")
-	part, err := writer.CreatePart(headers)
-	if err != nil {
-		t.Fatalf("CreatePart() error = %v", err)
-	}
-	if _, err := part.Write(fileData); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	request, err := http.NewRequest(http.MethodPost, url, &body)
-	if err != nil {
-		t.Fatalf("http.NewRequest() error = %v", err)
-	}
-	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: sessionCookie})
-	request.Header.Set("X-Client-ID", clientID)
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		t.Fatalf("Do() error = %v", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != wantStatus {
-		t.Fatalf("status = %d, want %d", response.StatusCode, wantStatus)
-	}
-}
-
-type fakeImageAnalyzer struct {
-	name string
-}
-
-func (f fakeImageAnalyzer) AnalyzeFoodImage(_ context.Context, _ []byte, _ string) (string, error) {
-	return f.name, nil
 }
 
 func dialFoodWS(t *testing.T, httpURL string, sessionCookie string) *websocket.Conn {

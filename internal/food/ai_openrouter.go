@@ -19,7 +19,6 @@ const openRouterBaseURL = "https://openrouter.ai/api/v1"
 
 type ProductGenerator interface {
 	GenerateProduct(ctx context.Context, description string) (ProductPreviewData, error)
-	AnalyzeVoice(ctx context.Context, transcript string) (ProductPreviewData, error)
 }
 
 type OpenRouterProductGeneratorConfig struct {
@@ -97,10 +96,6 @@ func NewOpenRouterProductGenerator(cfg OpenRouterProductGeneratorConfig) (*OpenR
 
 func (g *OpenRouterProductGenerator) GenerateProduct(ctx context.Context, description string) (ProductPreviewData, error) {
 	return g.generate(ctx, productGenerationSystemPrompt, fmt.Sprintf(productGenerationUserPrompt, strings.TrimSpace(description)))
-}
-
-func (g *OpenRouterProductGenerator) AnalyzeVoice(ctx context.Context, transcript string) (ProductPreviewData, error) {
-	return g.generate(ctx, productGenerationSystemPrompt, fmt.Sprintf(voiceGenerationUserPrompt, strings.TrimSpace(transcript)))
 }
 
 func (g *OpenRouterProductGenerator) generate(ctx context.Context, systemPrompt string, userPrompt string) (ProductPreviewData, error) {
@@ -277,5 +272,3 @@ func validatePreviewData(data ProductPreviewData) error {
 const productGenerationSystemPrompt = "You analyze food descriptions and return one generalized Russian product with nutrition. Respond with JSON only. Fields: generalizedName, kcals, protein, fat, carbs, fiber, description. Use Russian for generalizedName and description. Generalize brands and variants to the core product. Keep values realistic per 100g."
 
 const productGenerationUserPrompt = "Generate a new generalized food candidate from this user query: %s"
-
-const voiceGenerationUserPrompt = "Generate a generalized food candidate from this voice transcript: %s"

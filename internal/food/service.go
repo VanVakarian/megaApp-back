@@ -17,6 +17,12 @@ import (
 
 const kcalsIn1KG = 7700
 
+// AdminChecker looks the user's role up at call time (not cached), so a demoted admin loses
+// the archive rights immediately.
+type AdminChecker interface {
+	IsAdmin(ctx context.Context, userID int64) (bool, error)
+}
+
 type Service struct {
 	repo                   *Repository
 	idempotency            *idempotency.Store
@@ -25,7 +31,7 @@ type Service struct {
 	searchCache            *SearchCache
 	productGenerator       ProductGenerator
 	embeddingGenerator     EmbeddingGenerator
-	imageAnalyzer          ImageAnalyzer
+	adminChecker           AdminChecker
 	imageGenerationRequest ImageGenerationRequester
 	imageVersions          ImageVersionProvider
 	clock                  clockplatform.Clock
@@ -152,6 +158,7 @@ type CatalogueEntry struct {
 	Carbs        float64 `json:"carbs"`
 	Fiber        float64 `json:"fiber"`
 	Description  string  `json:"description"`
+	Archived     bool    `json:"archived"`
 	ImageVersion *int64  `json:"imageVersion,omitempty"`
 	CanDelete    *bool   `json:"canDelete,omitempty"`
 }
@@ -168,8 +175,8 @@ func (s *Service) SetEmbeddingGenerator(generator EmbeddingGenerator) {
 	s.embeddingGenerator = generator
 }
 
-func (s *Service) SetImageAnalyzer(analyzer ImageAnalyzer) {
-	s.imageAnalyzer = analyzer
+func (s *Service) SetAdminChecker(checker AdminChecker) {
+	s.adminChecker = checker
 }
 
 func (s *Service) SetImageGenerationRequester(requester ImageGenerationRequester) {
@@ -455,6 +462,7 @@ func (s *Service) getCachedCatalogueBase(ctx context.Context) (map[int64]Catalog
 			Carbs:       nullableFloat64Value(row.Carbs),
 			Fiber:       nullableFloat64Value(row.Fiber),
 			Description: nullableStringValue(row.Description),
+			Archived:    row.Archived,
 		}
 	}
 	s.catalogueCache.Set(result)
@@ -492,6 +500,7 @@ func (s *Service) GetCatalogueEntry(ctx context.Context, catalogueID int64) (*Ca
 		Carbs:        nullableFloat64Value(row.Carbs),
 		Fiber:        nullableFloat64Value(row.Fiber),
 		Description:  nullableStringValue(row.Description),
+		Archived:     row.Archived,
 		ImageVersion: s.imageVersion(row.ID),
 		CanDelete:    &canDelete,
 	}, nil
@@ -529,6 +538,11 @@ func (s *Service) CreateDiaryEntry(ctx context.Context, userID int64, operationI
 		return cached, false, nil
 	}
 
+	if err := s.requireCatalogueEntry(ctx, tx, foodCatalogueID, false); err != nil {
+		_ = tx.Rollback()
+		return DiaryEntry{}, false, err
+	}
+
 	historyJSON, err := toHistoryJSON(history)
 	if err != nil {
 		_ = tx.Rollback()
@@ -561,6 +575,20 @@ func (s *Service) CreateDiaryEntry(ctx context.Context, userID int64, operationI
 	result.Kcals = kcals
 	s.InvalidateStats(userID)
 	return result, true, nil
+}
+
+// requireCatalogueEntry rejects a product that does not exist, or is archived unless
+// allowArchived — a new diary entry may not use an archived product, while restoring a deleted
+// day may bring back entries that already had one.
+func (s *Service) requireCatalogueEntry(ctx context.Context, tx *sql.Tx, catalogueID int64, allowArchived bool) error {
+	archived, found, err := s.repo.GetCatalogueArchived(ctx, tx, catalogueID)
+	if err != nil {
+		return err
+	}
+	if !found || (archived && !allowArchived) {
+		return legacy.NewError(legacy.ErrorKindValidation, "Product is not available")
+	}
+	return nil
 }
 
 func (s *Service) EditDiaryEntry(ctx context.Context, userID int64, operationID string, diaryID int64, targetFoodWeight int64, requestedAction string) (entry *DiaryEntry, applied bool, err error) {
@@ -779,6 +807,10 @@ func (s *Service) RestoreDiaryEntriesForDay(ctx context.Context, userID int64, o
 	} else {
 		normalized := make([]DiaryEntry, 0, len(entries))
 		for _, entry := range entries {
+			if err := s.requireCatalogueEntry(ctx, tx, entry.FoodCatalogueID, true); err != nil {
+				_ = tx.Rollback()
+				return nil, false, err
+			}
 			history := entry.History
 			if len(history) == 0 {
 				history = []HistoryEntry{{Action: historyActionInit, Value: entry.FoodWeight}}

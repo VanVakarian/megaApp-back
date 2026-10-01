@@ -31,14 +31,11 @@ type saveProductRequest struct {
 	Carbs       float64 `json:"carbs"`
 	Fiber       float64 `json:"fiber"`
 	Description string  `json:"description"`
+	Archived    *bool   `json:"archived"`
 }
 
 type deleteCatalogueEntryRequest struct {
 	OperationID string `json:"operationId"`
-}
-
-type analyzeVoiceRequest struct {
-	Transcript string `json:"transcript"`
 }
 
 func NewCatalogueHandler(service *Service, realtime RealtimePublisher, metricsRecorder MetricsRecorder) *CatalogueHandler {
@@ -49,8 +46,6 @@ func RegisterCatalogueRoutes(router chi.Router, authService *auth.Service, handl
 	router.With(auth.Middleware(authService)).Get("/api/food/search", handler.SearchCatalogue)
 	router.With(auth.Middleware(authService)).Post("/api/food/generate-product-preview", handler.GenerateProductPreview)
 	router.With(auth.Middleware(authService)).Post("/api/food/save-product", handler.SaveProduct)
-	router.With(auth.Middleware(authService)).Post("/api/food/analyze-image", handler.AnalyzeImage)
-	router.With(auth.Middleware(authService)).Post("/api/food/analyze-voice", handler.AnalyzeVoice)
 	router.With(auth.Middleware(authService)).Delete("/api/food/catalogue/{catalogueId}", handler.DeleteCatalogueEntry)
 }
 
@@ -111,6 +106,7 @@ func (h *CatalogueHandler) SaveProduct(w http.ResponseWriter, r *http.Request) {
 		Carbs:       request.Carbs,
 		Fiber:       request.Fiber,
 		Description: request.Description,
+		Archived:    request.Archived,
 	})
 	if err != nil {
 		legacy.WriteAppResultError(w, err, http.StatusInternalServerError, "Internal server error")
@@ -131,22 +127,6 @@ func (h *CatalogueHandler) SaveProduct(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	legacy.WriteJSON(w, statusCode, map[string]any{"result": true, "data": map[string]any{"catalogueEntry": entry}})
-}
-
-func (h *CatalogueHandler) AnalyzeVoice(w http.ResponseWriter, r *http.Request) {
-	var request analyzeVoiceRequest
-	if err := legacy.DecodeJSON(r, &request); err != nil {
-		legacy.WriteAppResultError(w, err, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	response, err := h.service.AnalyzeVoiceTranscript(r.Context(), request.Transcript)
-	if err != nil {
-		legacy.WriteAppResultError(w, err, http.StatusInternalServerError, "Internal server error")
-		return
-	}
-
-	legacy.WriteJSON(w, http.StatusOK, map[string]any{"result": true, "data": response})
 }
 
 func (h *CatalogueHandler) DeleteCatalogueEntry(w http.ResponseWriter, r *http.Request) {

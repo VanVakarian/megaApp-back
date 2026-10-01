@@ -27,10 +27,6 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-type ImageAnalyzer interface {
-	AnalyzeFoodImage(ctx context.Context, imageData []byte, mimeType string) (string, error)
-}
-
 type GeneratedImage struct {
 	Data     []byte
 	Format   string
@@ -52,12 +48,6 @@ type ImageGenerationRequester interface {
 
 type ImageVersionProvider interface {
 	ImageVersion(catalogueID int64) *int64
-}
-
-type ImageAnalysisData struct {
-	DetectedProductName string           `json:"detectedProductName"`
-	SearchResults       []CatalogueEntry `json:"searchResults"`
-	SearchQuery         string           `json:"searchQuery"`
 }
 
 type ImageGenerationResult struct {

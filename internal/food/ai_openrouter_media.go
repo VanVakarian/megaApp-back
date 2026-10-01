@@ -16,20 +16,18 @@ import (
 )
 
 type OpenRouterMediaClientConfig struct {
-	APIKey      string
-	VisionModel string
-	ImageModel  string
-	Timeout     time.Duration
-	Logger      *slog.Logger
+	APIKey     string
+	ImageModel string
+	Timeout    time.Duration
+	Logger     *slog.Logger
 }
 
 type OpenRouterMediaClient struct {
-	client      *openai.Client
-	httpClient  *http.Client
-	apiKey      string
-	visionModel string
-	imageModel  string
-	logger      *slog.Logger
+	client     *openai.Client
+	httpClient *http.Client
+	apiKey     string
+	imageModel string
+	logger     *slog.Logger
 }
 
 type aiMediaChatCompletionRequest struct {
@@ -41,21 +39,6 @@ type aiMediaChatCompletionRequest struct {
 type aiMediaChatMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
-}
-
-type aiMediaTextPart struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type aiMediaImagePart struct {
-	Type     string             `json:"type"`
-	ImageURL aiMediaImageDetail `json:"image_url"`
-}
-
-type aiMediaImageDetail struct {
-	URL    string `json:"url"`
-	Detail string `json:"detail,omitempty"`
 }
 
 type aiMediaChatCompletionResponse struct {
@@ -79,10 +62,6 @@ type aiMediaImageURL struct {
 	URL string `json:"url"`
 }
 
-type aiImageRecognitionPayload struct {
-	ProductName string `json:"productName"`
-}
-
 func NewOpenRouterMediaClient(cfg OpenRouterMediaClientConfig) (*OpenRouterMediaClient, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("openrouter api key is required")
@@ -98,61 +77,12 @@ func NewOpenRouterMediaClient(cfg OpenRouterMediaClientConfig) (*OpenRouterMedia
 		option.WithHeader("X-Title", "megaapp-back"),
 	)
 	return &OpenRouterMediaClient{
-		client:      &client,
-		httpClient:  httpClient,
-		apiKey:      cfg.APIKey,
-		visionModel: strings.TrimSpace(cfg.VisionModel),
-		imageModel:  strings.TrimSpace(cfg.ImageModel),
-		logger:      cfg.Logger,
+		client:     &client,
+		httpClient: httpClient,
+		apiKey:     cfg.APIKey,
+		imageModel: strings.TrimSpace(cfg.ImageModel),
+		logger:     cfg.Logger,
 	}, nil
-}
-
-func (c *OpenRouterMediaClient) AnalyzeFoodImage(ctx context.Context, imageData []byte, mimeType string) (string, error) {
-	if c.visionModel == "" {
-		c.logger.Debug("vision analysis skipped: model not configured")
-		return "", errors.New("openrouter vision model is not configured")
-	}
-	request := aiMediaChatCompletionRequest{
-		Model: c.visionModel,
-		Messages: []aiMediaChatMessage{
-			{Role: "system", Content: []aiMediaTextPart{{Type: "text", Text: "You analyze food photos. Respond with JSON only. Return {\"productName\":\"\"} if no recognizable food product is present. Otherwise return {\"productName\":\"<generalized Russian product name>\"}."}}},
-			{Role: "user", Content: []any{
-				aiMediaTextPart{Type: "text", Text: "Detect the main food product in this image and answer with JSON only."},
-				aiMediaImagePart{Type: "image_url", ImageURL: aiMediaImageDetail{URL: buildImageDataURL(imageData, mimeType), Detail: "low"}},
-			}},
-		},
-	}
-	c.logger.Debug("vision analysis request built", "model", c.visionModel, "imageBytes", len(imageData), "mimeType", mimeType)
-
-	start := time.Now()
-	var response aiMediaChatCompletionResponse
-	if err := c.client.Post(ctx, "chat/completions", request, &response); err != nil {
-		c.logger.Error("vision analysis request failed", "model", c.visionModel, "duration", time.Since(start), "error", err)
-		return "", fmt.Errorf("openrouter image analysis request failed: %w", err)
-	}
-	duration := time.Since(start)
-	c.logger.Debug("vision analysis response received", "model", c.visionModel, "duration", duration, "choicesCount", len(response.Choices))
-	if len(response.Choices) == 0 {
-		c.logger.Error("vision analysis returned no choices", "model", c.visionModel, "duration", duration)
-		return "", errors.New("openrouter returned no choices")
-	}
-	payload, err := extractJSON(response.Choices[0].Message.Content)
-	if err != nil {
-		trimmed := strings.TrimSpace(response.Choices[0].Message.Content)
-		if strings.EqualFold(trimmed, "no_food") || strings.EqualFold(trimmed, "none") {
-			c.logger.Debug("vision analysis found no food in image")
-			return "", nil
-		}
-		c.logger.Error("vision analysis response parse failed", "model", c.visionModel, "content", response.Choices[0].Message.Content, "error", err)
-		return "", err
-	}
-	var parsed aiImageRecognitionPayload
-	if err := json.Unmarshal([]byte(payload), &parsed); err != nil {
-		c.logger.Error("vision analysis json unmarshal failed", "model", c.visionModel, "payload", payload, "error", err)
-		return "", fmt.Errorf("parse image analysis json: %w", err)
-	}
-	c.logger.Debug("vision analysis parsed", "model", c.visionModel, "productName", parsed.ProductName)
-	return strings.TrimSpace(parsed.ProductName), nil
 }
 
 func (c *OpenRouterMediaClient) GenerateFoodImage(ctx context.Context, prompt string) (GeneratedImage, error) {
@@ -218,10 +148,6 @@ func (c *OpenRouterMediaClient) CheckRateLimits(ctx context.Context) (map[string
 		return nil, err
 	}
 	return payload, nil
-}
-
-func buildImageDataURL(data []byte, mimeType string) string {
-	return "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 func parseDataImageURL(value string) (string, string, error) {

@@ -238,10 +238,11 @@ func buildMetricsModule(cfg config.Config, logger *slog.Logger, hub *ws.Hub, aut
 	}, nil
 }
 
-func buildFoodModule(read *sql.DB, write sqlite.WriteDB, cfg config.Config, logger *slog.Logger, hub *ws.Hub, clk clockplatform.Clock, metricsRecorder food.MetricsRecorder) (foodModule, error) {
+func buildFoodModule(read *sql.DB, write sqlite.WriteDB, cfg config.Config, logger *slog.Logger, hub *ws.Hub, authService *auth.Service, clk clockplatform.Clock, metricsRecorder food.MetricsRecorder) (foodModule, error) {
 	repo := food.NewRepository(read, write)
 	service := food.NewService(repo, idempotency.NewStore(write))
 	service.SetClock(clk)
+	service.SetAdminChecker(authService)
 	service.SetPersonalKcalConfig(food.PersonalKcalConfig{
 		LookbackMonths:          cfg.PersonalKcalLookbackMonths,
 		DecayRate:               cfg.PersonalKcalDecayRate,
@@ -269,16 +270,14 @@ func buildFoodModule(read *sql.DB, write sqlite.WriteDB, cfg config.Config, logg
 		}
 		service.SetProductGenerator(productGenerator)
 		mediaClient, err = food.NewOpenRouterMediaClient(food.OpenRouterMediaClientConfig{
-			APIKey:      cfg.OpenRouterAPIKey,
-			VisionModel: cfg.OpenRouterVisionModel,
-			ImageModel:  cfg.OpenRouterImageModel,
-			Timeout:     cfg.OpenRouterTimeout,
-			Logger:      logger,
+			APIKey:     cfg.OpenRouterAPIKey,
+			ImageModel: cfg.OpenRouterImageModel,
+			Timeout:    cfg.OpenRouterTimeout,
+			Logger:     logger,
 		})
 		if err != nil {
 			return foodModule{}, err
 		}
-		service.SetImageAnalyzer(mediaClient)
 	}
 	if strings.TrimSpace(cfg.OpenAIAPIKey) != "" {
 		embeddingGenerator, err := food.NewOpenAIEmbeddingGenerator(food.OpenAIEmbeddingGeneratorConfig{

@@ -1088,8 +1088,8 @@ func validateTransactionInput(input TransactionInput) (TransactionInput, error) 
 		return normalized, nil
 	}
 
-	if !isInvestTransactionKind(input.Kind) && input.Amount <= 0 {
-		return TransactionInput{}, legacy.NewError(legacy.ErrorKindValidation, "amount must be greater than 0")
+	if !isInvestTransactionKind(input.Kind) && input.Amount < 0 {
+		return TransactionInput{}, legacy.NewError(legacy.ErrorKindValidation, "amount must be greater than or equal to 0")
 	}
 	return normalized, nil
 }

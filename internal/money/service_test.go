@@ -349,6 +349,149 @@ func TestServiceTransactionLifecycleAndValidation(t *testing.T) {
 	}
 }
 
+func TestServiceZeroAmountAllowedOnlyForIncomeAndExpense(t *testing.T) {
+	db := openMoneyTestDB(t)
+	insertMoneyTestUser(t, db, 1, "alice")
+	insertMoneyReferenceFixtures(t, db, 1)
+	insertMoneyAccount(t, db, 1, 2, "Card", AccountKindCard)
+	insertMoneyBrokerageAccount(t, db, 1, 3, "Brokerage", AccountKindBrokerage)
+	insertMoneyCategory(t, db, 1, 3, "Salary", nil, CategoryTypeIncome)
+	insertMoneyAsset(t, db, 1, 1, "Apple", "AAPL", AssetTypeStock, []int64{3})
+	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
+
+	createCases := []struct {
+		name  string
+		input TransactionInput
+		want  string
+	}{
+		{
+			name:  "expense zero",
+			input: TransactionInput{DateISO: "2026-06-18", AccountID: 1, Amount: 0, CategoryID: int64Ptr(2), Kind: TransactionKindExpense, Notes: stringPtr("refund")},
+		},
+		{
+			name:  "expense zero without category and with gift flag",
+			input: TransactionInput{DateISO: "2026-06-18", AccountID: 1, Amount: 0, Kind: TransactionKindExpense, IsGift: true},
+		},
+		{
+			name:  "income zero",
+			input: TransactionInput{DateISO: "2026-06-18", AccountID: 1, Amount: 0, CategoryID: int64Ptr(3), Kind: TransactionKindIncome},
+		},
+		{
+			name:  "expense negative",
+			input: TransactionInput{DateISO: "2026-06-18", AccountID: 1, Amount: -1, Kind: TransactionKindExpense},
+			want:  "amount must be greater than or equal to 0",
+		},
+		{
+			name:  "income negative",
+			input: TransactionInput{DateISO: "2026-06-18", AccountID: 1, Amount: -1, Kind: TransactionKindIncome},
+			want:  "amount must be greater than or equal to 0",
+		},
+		{
+			name: "transfer zero amount",
+			input: TransactionInput{
+				DateISO: "2026-06-18", AccountID: 1, Amount: 0, TwinAccountID: int64Ptr(2), TwinAmount: float64Ptr(10), Kind: TransactionKindTransfer,
+			},
+			want: "amount must be greater than 0",
+		},
+		{
+			name: "transfer zero twin amount",
+			input: TransactionInput{
+				DateISO: "2026-06-18", AccountID: 1, Amount: 10, TwinAccountID: int64Ptr(2), TwinAmount: float64Ptr(0), Kind: TransactionKindTransfer,
+			},
+			want: "amount must be greater than 0",
+		},
+		{
+			name: "dividend zero",
+			input: TransactionInput{
+				DateISO: "2026-06-18", AccountID: 3, Amount: 0, Kind: TransactionKindInvestDividend, DetailsJSON: map[string]any{"assetId": 1},
+			},
+			want: "amount must be greater than 0",
+		},
+		{
+			name: "buy zero price",
+			input: TransactionInput{
+				DateISO: "2026-06-18", AccountID: 3, Kind: TransactionKindInvestBuy, DetailsJSON: map[string]any{"assetId": 1, "quantity": 2, "price": 0},
+			},
+			want: "detailsJSON.price must be greater than 0",
+		},
+	}
+
+	for index, tc := range createCases {
+		t.Run(tc.name, func(t *testing.T) {
+			created, _, err := service.CreateTransaction(context.Background(), 1, fmt.Sprintf("op-zero-create-%d", index), tc.input)
+			if tc.want != "" {
+				assertMoneyValidationError(t, err, tc.want)
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateTransaction() error = %v", err)
+			}
+			stored, err := service.repo.GetTransactionByID(context.Background(), db, 1, created.ID)
+			if err != nil {
+				t.Fatalf("GetTransactionByID() error = %v", err)
+			}
+			if stored == nil || stored.Amount != 0 || stored.Kind != tc.input.Kind || stored.Version != 1 {
+				t.Fatalf("stored transaction = %+v, want zero amount of kind %q", stored, tc.input.Kind)
+			}
+		})
+	}
+
+	t.Run("update to zero and back", func(t *testing.T) {
+		created, _, err := service.CreateTransaction(context.Background(), 1, "op-zero-update-create", TransactionInput{
+			DateISO: "2026-06-18", AccountID: 1, Amount: 100, CategoryID: int64Ptr(2), Kind: TransactionKindExpense, Notes: stringPtr("order"),
+		})
+		if err != nil {
+			t.Fatalf("CreateTransaction() error = %v", err)
+		}
+
+		for step, want := range []float64{0, 100} {
+			_, _, err = service.UpdateTransaction(context.Background(), 1, fmt.Sprintf("op-zero-update-%d", step), created.ID, TransactionInput{
+				DateISO: "2026-06-18", AccountID: 1, Amount: want, CategoryID: int64Ptr(2), Kind: TransactionKindExpense, Notes: stringPtr("order, refunded 2026-06-25"),
+			})
+			if err != nil {
+				t.Fatalf("UpdateTransaction() amount %v error = %v", want, err)
+			}
+			stored, err := service.repo.GetTransactionByID(context.Background(), db, 1, created.ID)
+			if err != nil {
+				t.Fatalf("GetTransactionByID() error = %v", err)
+			}
+			if stored == nil || stored.Amount != want || stored.Version != int64(step+2) || stored.CategoryID == nil || *stored.CategoryID != 2 {
+				t.Fatalf("stored transaction after amount %v = %+v", want, stored)
+			}
+		}
+
+		_, _, err = service.UpdateTransaction(context.Background(), 1, "op-zero-update-negative", created.ID, TransactionInput{
+			DateISO: "2026-06-18", AccountID: 1, Amount: -5, Kind: TransactionKindExpense,
+		})
+		assertMoneyValidationError(t, err, "amount must be greater than or equal to 0")
+	})
+
+	t.Run("update legacy zero row", func(t *testing.T) {
+		result, err := db.Exec(`INSERT INTO moneyTransaction (userId, dateISO, accountId, amount, categoryId, kind, isGift, notes) VALUES (1, '2024-10-25', 1, 0, 2, 'expense', 1, 'legacy refund')`)
+		if err != nil {
+			t.Fatalf("Exec() error = %v", err)
+		}
+		legacyID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatalf("LastInsertId() error = %v", err)
+		}
+
+		_, _, err = service.UpdateTransaction(context.Background(), 1, "op-zero-legacy-update", legacyID, TransactionInput{
+			DateISO: "2024-10-25", AccountID: 1, Amount: 0, CategoryID: int64Ptr(2), Kind: TransactionKindExpense, IsGift: true, Notes: stringPtr("legacy refund, edited"),
+		})
+		if err != nil {
+			t.Fatalf("UpdateTransaction() error = %v", err)
+		}
+		stored, err := service.repo.GetTransactionByID(context.Background(), db, 1, legacyID)
+		if err != nil {
+			t.Fatalf("GetTransactionByID() error = %v", err)
+		}
+		if stored == nil || stored.Amount != 0 || stored.Notes == nil || *stored.Notes != "legacy refund, edited" {
+			t.Fatalf("stored legacy transaction = %+v", stored)
+		}
+	})
+}
+
 func TestServiceTransferLifecycleAndRollback(t *testing.T) {
 	db := openMoneyTestDB(t)
 	insertMoneyTestUser(t, db, 1, "alice")
@@ -832,7 +975,7 @@ func openMoneyTestDB(t *testing.T) *sql.DB {
 			userId INTEGER NOT NULL,
 			dateISO TEXT NOT NULL,
 			accountId INTEGER NOT NULL,
-			amount REAL NOT NULL,
+			amount REAL NOT NULL CHECK(amount >= 0),
 			categoryId INTEGER,
 			kind TEXT NOT NULL,
 			isGift BOOLEAN NOT NULL DEFAULT 0,

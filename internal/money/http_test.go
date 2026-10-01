@@ -160,6 +160,40 @@ func TestMoneyRoutesTransactionsCrud(t *testing.T) {
 		"notes":       "Salary updated",
 	}, http.StatusOK)
 
+	zeroResponse := assertMoneyJSON(t, http.MethodPost, server.URL+"/api/money/transactions", tokens.AccessToken, map[string]any{
+		"operationId": "op-create-zero-expense",
+		"dateISO":     "2026-06-18",
+		"accountId":   1,
+		"amount":      0,
+		"categoryId":  2,
+		"kind":        "expense",
+		"notes":       "Refunded",
+	}, http.StatusCreated)
+	zeroID := int64(mustMoneyDataMap(t, zeroResponse)["id"].(float64))
+	var zeroAmount float64
+	if err := db.QueryRow(`SELECT amount FROM moneyTransaction WHERE id = ?`, zeroID).Scan(&zeroAmount); err != nil {
+		t.Fatalf("QueryRow() error = %v", err)
+	}
+	if zeroAmount != 0 {
+		t.Fatalf("zero expense amount = %v, want 0", zeroAmount)
+	}
+	assertMoneyStatus(t, http.MethodPost, server.URL+"/api/money/transactions", tokens.AccessToken, map[string]any{
+		"operationId": "op-create-negative-expense",
+		"dateISO":     "2026-06-18",
+		"accountId":   1,
+		"amount":      -1,
+		"kind":        "expense",
+	}, http.StatusBadRequest)
+	assertMoneyStatus(t, http.MethodPost, server.URL+"/api/money/transactions", tokens.AccessToken, map[string]any{
+		"operationId":   "op-create-zero-transfer",
+		"dateISO":       "2026-06-18",
+		"accountId":     1,
+		"amount":        0,
+		"twinAccountId": 2,
+		"twinAmount":    0,
+		"kind":          "transfer",
+	}, http.StatusBadRequest)
+
 	transferResponse := assertMoneyJSON(t, http.MethodPost, server.URL+"/api/money/transactions", tokens.AccessToken, map[string]any{
 		"operationId":   "op-create-transfer",
 		"dateISO":       "2026-06-20",

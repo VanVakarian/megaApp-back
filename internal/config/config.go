@@ -77,7 +77,8 @@ type Config struct {
 	MaxMultipartBodyBytes               int64
 	WSReadLimitBytes                    int64
 	WSWriteTimeout                      time.Duration
-	TelemetryEnabled                    bool
+	IngestSources                       []IngestSource
+	IngestKeys                          []string
 	BuildCommit                         string
 	BuildTime                           string
 	GoVersion                           string
@@ -124,7 +125,6 @@ func Load() (Config, error) {
 		BackupStorageAccessKeyID:     getString("BACKUP_STORAGE_ACCESS_KEY_ID", ""),
 		BackupStorageSecretAccessKey: getString("BACKUP_STORAGE_SECRET_ACCESS_KEY", ""),
 		MetricsServiceKey:            getString("METRICS_SERVICE_KEY", "megaapp"),
-		TelemetryEnabled:             getBool("TELEMETRY_ENABLED", true),
 		FlatlineBaseURL:              getString("FLATLINE_BASE_URL", ""),
 		BuildCommit:                  buildCommit,
 		BuildTime:                    buildTime,
@@ -338,6 +338,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("load config: %w", err)
 	}
 	cfg.FlatlinePollMaxCatchUp = time.Duration(flatlinePollMaxCatchUpSeconds) * time.Second
+
+	cfg.IngestSources, cfg.IngestKeys, err = loadIngest()
+	if err != nil {
+		return Config{}, err
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

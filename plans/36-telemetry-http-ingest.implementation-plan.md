@@ -2,6 +2,8 @@
 
 Парный план: [megaapp-front/plans/36-frontend-telemetry-unification.implementation-plan.md](../../megaapp-front/plans/36-frontend-telemetry-unification.implementation-plan.md). Главный по объёму — фронт, этот план — второстепенный.
 
+**Дальнейшее развитие:** маршрут, формат запроса, раскладка файлов и флаг включения из этого плана заменяются единым приёмом — [42-extension-log-ingest](42-extension-log-ingest.implementation-plan.md) (фронт: [42-ingest-contract-migration](../../megaapp-front/plans/42-ingest-contract-migration.implementation-plan.md)). Ротация и запись остались, но вынесены в общий пакет.
+
 ## Цель
 
 Заменить временный WS-хендлер `PERFORMANCE_METRICS_BATCH` на обычный authenticated HTTP-endpoint, принимающий любой `TelemetryEvent` (performance/error/log), сохранив рабочий механизм ротации/архивации NDJSON. Все события — в одном общем файле, без деления по типу: различение — по namespace поля `operation` (`app.*`, `error.*`, `log.*`) внутри записи, поиск по единому большому NDJSON остаётся быстрым (`grep`/`jq`), разносить по файлам незачем.

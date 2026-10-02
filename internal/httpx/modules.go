@@ -12,6 +12,7 @@ import (
 	"megaapp-back/internal/backup"
 	"megaapp-back/internal/config"
 	"megaapp-back/internal/food"
+	"megaapp-back/internal/ingest"
 	"megaapp-back/internal/jobs"
 	"megaapp-back/internal/metrics"
 	"megaapp-back/internal/money"
@@ -21,7 +22,6 @@ import (
 	"megaapp-back/internal/platform/sqlite"
 	"megaapp-back/internal/quotes"
 	"megaapp-back/internal/settings"
-	"megaapp-back/internal/telemetry"
 	"megaapp-back/internal/ws"
 )
 
@@ -45,8 +45,8 @@ type moneyModule struct {
 	handler *money.Handler
 }
 
-type telemetryModule struct {
-	handler *telemetry.Handler
+type ingestModule struct {
+	handler *ingest.Handler
 }
 
 type quotesModule struct {
@@ -99,8 +99,8 @@ func buildWSModule(cfg config.Config, authService *auth.Service, logger *slog.Lo
 	return wsModule{hub: hub, handler: ws.NewHandler(authService, hub)}
 }
 
-func buildTelemetryModule(cfg config.Config) telemetryModule {
-	return telemetryModule{handler: telemetry.NewHandler(cfg.TelemetryEnabled, cfg.DataDir)}
+func buildIngestModule(cfg config.Config, logger *slog.Logger) ingestModule {
+	return ingestModule{handler: ingest.NewHandler(cfg.DataDir, cfg.IngestSources, cfg.IngestKeys, logger)}
 }
 
 func buildMoneyModule(read *sql.DB, write sqlite.WriteDB) moneyModule {

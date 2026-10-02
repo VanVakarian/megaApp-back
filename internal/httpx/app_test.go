@@ -163,6 +163,53 @@ func TestAppRejectsOversizedRequestBody(t *testing.T) {
 	}
 }
 
+func TestAppServesTheConfiguredIngestSourcesOnly(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := appTestConfig(tempDir)
+	const key = "wiringwiringwiringwiring12345678"
+	cfg.IngestSources = []config.IngestSource{{Name: "ext", RotateBytes: 1_000_000}}
+	cfg.IngestKeys = []string{key}
+
+	prepareAppTestFiles(t, cfg)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app, err := NewApp(context.Background(), cfg, logger)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	defer func() { _ = app.Shutdown(context.Background()) }()
+
+	server := httptest.NewServer(app.Handler)
+	defer server.Close()
+
+	post := func(path, withKey string) int {
+		request, err := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(`{"events":[{"id":"a","stream":"s","at":1,"data":{}}]}`))
+		if err != nil {
+			t.Fatalf("NewRequest() error = %v", err)
+		}
+		request.Header.Set("X-Ingest-Key", withKey)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("Do() error = %v", err)
+		}
+		_ = response.Body.Close()
+		return response.StatusCode
+	}
+
+	if status := post("/api/ingest/ext", key); status != http.StatusOK {
+		t.Fatalf("configured source: status = %d, want 200", status)
+	}
+	if status := post("/api/ingest/ext", "wrong"); status != http.StatusUnauthorized {
+		t.Fatalf("wrong key: status = %d, want 401", status)
+	}
+	if status := post("/api/ingest/telemetry", key); status != http.StatusNotFound {
+		t.Fatalf("source that is not configured: status = %d, want 404", status)
+	}
+	if files, _ := filepath.Glob(filepath.Join(cfg.DataDir, "ingest", "ext", "ext-*.ndjson")); len(files) != 1 {
+		t.Fatalf("stored files = %v, want one under the source's own directory", files)
+	}
+}
+
 func appTestConfig(tempDir string) config.Config {
 	return config.Config{
 		AppEnv:                              "test",

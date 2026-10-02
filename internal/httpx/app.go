@@ -14,6 +14,7 @@ import (
 	"megaapp-back/internal/config"
 	"megaapp-back/internal/food"
 	"megaapp-back/internal/httpx/legacy"
+	"megaapp-back/internal/ingest"
 	"megaapp-back/internal/jobs"
 	"megaapp-back/internal/metrics"
 	"megaapp-back/internal/money"
@@ -21,7 +22,6 @@ import (
 	sqliteplatform "megaapp-back/internal/platform/sqlite"
 	"megaapp-back/internal/quotes"
 	"megaapp-back/internal/settings"
-	"megaapp-back/internal/telemetry"
 	"megaapp-back/internal/ws"
 
 	"github.com/go-chi/chi/v5"
@@ -63,7 +63,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, clk clo
 	wsModule := buildWSModule(cfg, authModule.service, logger)
 	settingsModule := buildSettingsModule(db.Read(), db.Write(), wsModule.hub)
 	moneyModule := buildMoneyModule(db.Read(), db.Write())
-	telemetryModule := buildTelemetryModule(cfg)
+	ingestModule := buildIngestModule(cfg, logger)
 	authModule.handler.SetSessionRevoker(func(sessionID string) {
 		wsModule.hub.CloseSession(sessionID, 4001, "Session revoked")
 	})
@@ -138,7 +138,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, clk clo
 	auth.RegisterRoutes(router, authModule.handler)
 	settings.RegisterRoutes(router, authModule.service, settingsModule.handler)
 	money.RegisterRoutes(router, authModule.service, moneyModule.handler)
-	telemetry.RegisterRoutes(router, authModule.service, telemetryModule.handler)
+	ingest.RegisterRoutes(router, authModule.service, ingestModule.handler)
 	food.RegisterRoutes(router, authModule.service, foodModule.readHandler)
 	food.RegisterWriteRoutes(router, authModule.service, foodModule.writeHandler)
 	food.RegisterCatalogueRoutes(router, authModule.service, foodModule.catalogueHandler)
@@ -165,7 +165,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, clk clo
 		Observer:    observer,
 		DB:          db,
 		WSHub:       wsModule.hub,
-		Backgrounds: append(foodModule.backgrounds, jobRuntime, metricsModule.poller, metricsModule.processSampler),
+		Backgrounds: append(foodModule.backgrounds, jobRuntime, metricsModule.poller, metricsModule.processSampler, ingestModule.handler),
 		Handler:     router,
 		Server:      server,
 	}, nil

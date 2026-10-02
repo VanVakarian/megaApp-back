@@ -1,5 +1,5 @@
 // Package appendfile provides the durable append primitive shared by every rotating NDJSON/log
-// file writer in this backend (internal/telemetry, internal/metrics) — open-or-create, append,
+// file writer in this backend (internal/platform/rotatingfile, internal/metrics) — open-or-create, append,
 // fsync, close. Rotation policy (when to roll over, numbered vs timestamped names, archiving)
 // stays with each caller; only the physical write is shared.
 package appendfile

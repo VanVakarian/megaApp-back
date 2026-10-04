@@ -64,6 +64,17 @@ func TestMoneyRoutesSnapshotAndReferenceCrud(t *testing.T) {
 		"name":         "Salary",
 		"categoryType": "income",
 	}, http.StatusCreated)
+	assertMoneyStatus(t, http.MethodPost, server.URL+"/api/money/categories", tokens.AccessToken, map[string]any{
+		"name":           "Tax",
+		"categoryType":   "expense",
+		"hiddenOnCharts": true,
+		"hue":            300,
+	}, http.StatusCreated)
+	assertMoneyStatus(t, http.MethodPost, server.URL+"/api/money/categories", tokens.AccessToken, map[string]any{
+		"name":         "Bad hue",
+		"categoryType": "expense",
+		"hue":          361,
+	}, http.StatusBadRequest)
 	assertMoneyStatus(t, http.MethodPut, server.URL+"/api/money/categories/2", tokens.AccessToken, map[string]any{
 		"name":         "Groceries Updated",
 		"categoryType": "expense",
@@ -309,9 +320,11 @@ func TestMoneyRoutesInvestTransactions(t *testing.T) {
 
 	snapshotResponse := assertMoneyJSON(t, http.MethodGet, server.URL+"/api/money/snapshot", tokens.AccessToken, nil, http.StatusOK)
 	snapshotData := snapshotResponse["data"].(map[string]any)
-	trades := snapshotData["investAssetTrades"].([]any)
-	if len(trades) != 2 {
-		t.Fatalf("investAssetTrades len = %d, want 2", len(trades))
+	if _, exists := snapshotData["investAssetTrades"]; exists {
+		t.Fatal("snapshot must not carry investAssetTrades")
+	}
+	if transactions := snapshotData["transactions"].([]any); len(transactions) < 3 {
+		t.Fatalf("snapshot transactions len = %d, want at least 3 (buy, sell, dividend)", len(transactions))
 	}
 
 	assertMoneyStatus(t, http.MethodPost, server.URL+"/api/money/transactions", tokens.AccessToken, map[string]any{
@@ -376,14 +389,13 @@ func TestMoneyRoutesTradesAndRateHistory(t *testing.T) {
 		t.Fatalf("CreateTransaction() error = %v", err)
 	}
 
-	tradesResponse := assertMoneyJSON(t, http.MethodGet, server.URL+"/api/money/trades", tokens.AccessToken, nil, http.StatusOK)
-	trades := tradesResponse["data"].([]any)
-	if len(trades) != 1 {
-		t.Fatalf("trades len = %d, want 1", len(trades))
+	transactionsResponse := assertMoneyJSON(t, http.MethodGet, server.URL+"/api/money/transactions", tokens.AccessToken, nil, http.StatusOK)
+	transactions := transactionsResponse["data"].([]any)
+	if len(transactions) != 1 {
+		t.Fatalf("transactions len = %d, want 1", len(transactions))
 	}
-	trade := trades[0].(map[string]any)
-	if trade["assetTicker"] != "AAPL" || trade["kind"] != "invest_buy" {
-		t.Fatalf("trade = %#v", trade)
+	if transaction := transactions[0].(map[string]any); transaction["kind"] != "invest_buy" {
+		t.Fatalf("transaction = %#v", transaction)
 	}
 
 	rateHistoryResponse := assertMoneyJSON(t, http.MethodGet, server.URL+"/api/money/rate-history", tokens.AccessToken, nil, http.StatusOK)

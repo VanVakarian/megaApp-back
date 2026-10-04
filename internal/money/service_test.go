@@ -44,9 +44,6 @@ func TestServiceSnapshotIncludesNormalizedAssets(t *testing.T) {
 	if len(snapshot.Transactions) != 2 {
 		t.Fatalf("Transactions len = %d, want 2", len(snapshot.Transactions))
 	}
-	if len(snapshot.InvestAssetTrades) != 1 {
-		t.Fatalf("InvestAssetTrades len = %d, want 1", len(snapshot.InvestAssetTrades))
-	}
 	if len(snapshot.RateHistory) != 1 {
 		t.Fatalf("RateHistory len = %d, want 1", len(snapshot.RateHistory))
 	}
@@ -108,14 +105,6 @@ func TestServiceSnapshotFiltersRateHistoryForCurrenciesAndHeldAssets(t *testing.
 	assertMoneyRatesEqual(t, snapshot.RateHistory[2].RatesJSON, map[string]float64{"USD": 1, "RUB": 92})
 	assertMoneyRatesEqual(t, snapshot.RateHistory[3].RatesJSON, map[string]float64{"USD": 1, "RUB": 93})
 
-	trades, err := service.GetInvestAssetTrades(context.Background(), 1)
-	if err != nil {
-		t.Fatalf("GetInvestAssetTrades() error = %v", err)
-	}
-	if len(trades) != 2 {
-		t.Fatalf("InvestAssetTrades len = %d, want 2", len(trades))
-	}
-
 	rateHistory, err := service.GetRateHistory(context.Background())
 	if err != nil {
 		t.Fatalf("GetRateHistory() error = %v", err)
@@ -169,6 +158,88 @@ func TestServiceCategoryValidationAndDeleteGuards(t *testing.T) {
 
 	err = service.DeleteCategory(context.Background(), 1, 2)
 	assertMoneyConflictError(t, err, "Category is linked to existing transactions")
+
+	err = service.UpdateCategory(context.Background(), 1, 2, CategoryInput{Name: "Groceries", CategoryType: CategoryTypeIncome})
+	assertMoneyConflictError(t, err, "Category type cannot change while transactions use the category")
+
+	if err := service.UpdateCategory(context.Background(), 1, 2, CategoryInput{Name: "Groceries", CategoryType: CategoryTypeExpense, ParentID: int64Ptr(1), HiddenOnCharts: true}); err != nil {
+		t.Fatalf("UpdateCategory() with unchanged type error = %v", err)
+	}
+
+	unusedID, err := service.CreateCategory(context.Background(), 1, CategoryInput{Name: "Misc", CategoryType: CategoryTypeExpense})
+	if err != nil {
+		t.Fatalf("CreateCategory() error = %v", err)
+	}
+	if err := service.UpdateCategory(context.Background(), 1, unusedID, CategoryInput{Name: "Misc", CategoryType: CategoryTypeIncome}); err != nil {
+		t.Fatalf("UpdateCategory() retyping an unused category error = %v", err)
+	}
+}
+
+func TestServiceCategoryChartFieldsRoundTrip(t *testing.T) {
+	db := openMoneyTestDB(t)
+	insertMoneyTestUser(t, db, 1, "alice")
+	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
+	ctx := context.Background()
+
+	id, err := service.CreateCategory(ctx, 1, CategoryInput{
+		Name:           "Tax",
+		CategoryType:   CategoryTypeExpense,
+		HiddenOnCharts: true,
+		Hue:            int64Ptr(300),
+	})
+	if err != nil {
+		t.Fatalf("CreateCategory() error = %v", err)
+	}
+	plainID, err := service.CreateCategory(ctx, 1, CategoryInput{Name: "Plain", CategoryType: CategoryTypeExpense})
+	if err != nil {
+		t.Fatalf("CreateCategory() plain error = %v", err)
+	}
+
+	categories, err := service.GetCategories(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetCategories() error = %v", err)
+	}
+	byID := map[int64]Category{}
+	for _, category := range categories {
+		byID[category.ID] = category
+	}
+	tax := byID[id]
+	if !tax.HiddenOnCharts || tax.Hue == nil || *tax.Hue != 300 {
+		t.Fatalf("tax category = %+v", tax)
+	}
+	plain := byID[plainID]
+	if plain.HiddenOnCharts || plain.Hue != nil {
+		t.Fatalf("plain category defaults = %+v", plain)
+	}
+
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Tax", CategoryType: CategoryTypeExpense, Hue: int64Ptr(0)}); err != nil {
+		t.Fatalf("UpdateCategory() hue 0 error = %v", err)
+	}
+	updated, err := service.repo.GetCategoryByID(ctx, 1, id)
+	if err != nil || updated == nil || updated.HiddenOnCharts || updated.Hue == nil || *updated.Hue != 0 {
+		t.Fatalf("updated category = %+v, err = %v", updated, err)
+	}
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Tax", CategoryType: CategoryTypeExpense, Hue: int64Ptr(360)}); err != nil {
+		t.Fatalf("UpdateCategory() hue 360 error = %v", err)
+	}
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Tax", CategoryType: CategoryTypeExpense}); err != nil {
+		t.Fatalf("UpdateCategory() clearing hue error = %v", err)
+	}
+	cleared, _ := service.repo.GetCategoryByID(ctx, 1, id)
+	if cleared.Hue != nil {
+		t.Fatalf("cleared category = %+v", cleared)
+	}
+}
+
+func TestServiceCategoryHueValidation(t *testing.T) {
+	db := openMoneyTestDB(t)
+	insertMoneyTestUser(t, db, 1, "alice")
+	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
+
+	for _, hue := range []int64{-1, 361} {
+		_, err := service.CreateCategory(context.Background(), 1, CategoryInput{Name: "Food", CategoryType: CategoryTypeExpense, Hue: int64Ptr(hue)})
+		assertMoneyValidationError(t, err, "hue must be between 0 and 360")
+	}
 }
 
 func TestServiceAccountValidationAndDeleteGuards(t *testing.T) {
@@ -704,8 +775,8 @@ func TestServiceInvestTransactionLifecycleAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSnapshot() error = %v", err)
 	}
-	if len(snapshot.InvestAssetTrades) != 2 {
-		t.Fatalf("InvestAssetTrades len = %d, want 2", len(snapshot.InvestAssetTrades))
+	if len(snapshot.Transactions) != 3 {
+		t.Fatalf("Transactions len = %d, want 3", len(snapshot.Transactions))
 	}
 
 	_, _, err = service.CreateTransaction(context.Background(), 1, "op-invalid-account", TransactionInput{
@@ -932,6 +1003,8 @@ func openMoneyTestDB(t *testing.T) *sql.DB {
 			name TEXT NOT NULL,
 			parentId INTEGER,
 			categoryType TEXT NOT NULL,
+			hiddenOnCharts INTEGER NOT NULL DEFAULT 0,
+			hue INTEGER CHECK(hue IS NULL OR hue BETWEEN 0 AND 360),
 			FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (parentId) REFERENCES moneyCategories(id) ON DELETE RESTRICT
 		);

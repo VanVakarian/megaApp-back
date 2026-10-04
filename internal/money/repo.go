@@ -221,7 +221,7 @@ func (r *Repository) DeleteCurrency(ctx context.Context, userID int64, currencyI
 
 func (r *Repository) ListCategories(ctx context.Context, userID int64) ([]Category, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, parentId, categoryType
+		SELECT id, name, parentId, categoryType, hiddenOnCharts, hue
 		FROM moneyCategories
 		WHERE userId = ?
 		ORDER BY categoryType ASC, parentId ASC, name ASC
@@ -233,12 +233,10 @@ func (r *Repository) ListCategories(ctx context.Context, userID int64) ([]Catego
 
 	var result []Category
 	for rows.Next() {
-		var item Category
-		var parentID sql.NullInt64
-		if err := rows.Scan(&item.ID, &item.Name, &parentID, &item.CategoryType); err != nil {
+		item, err := scanCategory(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan category: %w", err)
 		}
-		item.ParentID = nullableInt64(parentID)
 		result = append(result, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -249,20 +247,18 @@ func (r *Repository) ListCategories(ctx context.Context, userID int64) ([]Catego
 
 func (r *Repository) GetCategoryByID(ctx context.Context, userID int64, categoryID int64) (*Category, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, name, parentId, categoryType
+		SELECT id, name, parentId, categoryType, hiddenOnCharts, hue
 		FROM moneyCategories
 		WHERE id = ? AND userId = ?
 	`, categoryID, userID)
 
-	var item Category
-	var parentID sql.NullInt64
-	if err := row.Scan(&item.ID, &item.Name, &parentID, &item.CategoryType); err != nil {
+	item, err := scanCategory(row)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("get category: %w", err)
 	}
-	item.ParentID = nullableInt64(parentID)
 	return &item, nil
 }
 
@@ -292,9 +288,9 @@ func (r *Repository) CountTransactionsByCategory(ctx context.Context, userID int
 
 func (r *Repository) CreateCategory(ctx context.Context, userID int64, input CategoryInput) (int64, error) {
 	result, err := r.write.ExecContext(ctx, `
-		INSERT INTO moneyCategories (name, categoryType, userId, parentId)
-		VALUES (?, ?, ?, ?)
-	`, input.Name, input.CategoryType, userID, nullableValue(input.ParentID))
+		INSERT INTO moneyCategories (name, categoryType, userId, parentId, hiddenOnCharts, hue)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, input.Name, input.CategoryType, userID, nullableValue(input.ParentID), boolToInt64(input.HiddenOnCharts), nullableValue(input.Hue))
 	if err != nil {
 		return 0, fmt.Errorf("create category: %w", err)
 	}
@@ -308,9 +304,9 @@ func (r *Repository) CreateCategory(ctx context.Context, userID int64, input Cat
 func (r *Repository) UpdateCategory(ctx context.Context, userID int64, categoryID int64, input CategoryInput) error {
 	_, err := r.write.ExecContext(ctx, `
 		UPDATE moneyCategories
-		SET name = ?, categoryType = ?, parentId = ?
+		SET name = ?, categoryType = ?, parentId = ?, hiddenOnCharts = ?, hue = ?
 		WHERE id = ? AND userId = ?
-	`, input.Name, input.CategoryType, nullableValue(input.ParentID), categoryID, userID)
+	`, input.Name, input.CategoryType, nullableValue(input.ParentID), boolToInt64(input.HiddenOnCharts), nullableValue(input.Hue), categoryID, userID)
 	if err != nil {
 		return fmt.Errorf("update category: %w", err)
 	}
@@ -786,6 +782,20 @@ func scanAsset(scanner interface{ Scan(dest ...any) error }) (Asset, error) {
 	item.AccountIDs = accountIDs
 	item.SuspendedSince = nullableString(suspendedSince)
 	item.SuspendedUntil = nullableString(suspendedUntil)
+	return item, nil
+}
+
+func scanCategory(scanner interface{ Scan(dest ...any) error }) (Category, error) {
+	var item Category
+	var parentID sql.NullInt64
+	var hue sql.NullInt64
+	var hiddenOnCharts int64
+	if err := scanner.Scan(&item.ID, &item.Name, &parentID, &item.CategoryType, &hiddenOnCharts, &hue); err != nil {
+		return Category{}, err
+	}
+	item.ParentID = nullableInt64(parentID)
+	item.HiddenOnCharts = hiddenOnCharts != 0
+	item.Hue = nullableInt64(hue)
 	return item, nil
 }
 

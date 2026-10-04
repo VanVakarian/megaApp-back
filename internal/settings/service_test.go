@@ -426,10 +426,18 @@ func TestMoneySettingsDefaultsAndRoundTrip(t *testing.T) {
 	if money.ConvertToUnifiedCurrency {
 		t.Fatal("ConvertToUnifiedCurrency default should be false")
 	}
+	if money.LinkTransactionsToCharts {
+		t.Fatal("LinkTransactionsToCharts default should be false")
+	}
+	if money.EnabledCategoryIds == nil || len(money.EnabledCategoryIds) != 0 || money.IncomeEnabledCategoryIds == nil || len(money.IncomeEnabledCategoryIds) != 0 {
+		t.Fatalf("enabled series defaults = %v / %v, want empty non-nil lists", money.EnabledCategoryIds, money.IncomeEnabledCategoryIds)
+	}
 
 	if _, _, err := service.Put(context.Background(), userID, NamespaceMoney, "op-1", rawFields(t, map[string]any{
-		"displayCurrency":     "USD",
-		"disabledCategoryIds": []any{1, 2, nil},
+		"displayCurrency":          "USD",
+		"enabledCategoryIds":       []any{1, 2, -1},
+		"incomeEnabledCategoryIds": []any{3, -2, -4},
+		"linkTransactionsToCharts": true,
 	})); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
@@ -444,8 +452,61 @@ func TestMoneySettingsDefaultsAndRoundTrip(t *testing.T) {
 	if money.DisplayCurrency != "USD" {
 		t.Fatalf("DisplayCurrency = %q, want USD", money.DisplayCurrency)
 	}
-	if len(money.DisabledCategoryIds) != 3 || money.DisabledCategoryIds[2] != nil {
-		t.Fatalf("DisabledCategoryIds = %v, want [1,2,null]", money.DisabledCategoryIds)
+	if !slices.Equal(money.EnabledCategoryIds, []int64{1, 2, -1}) {
+		t.Fatalf("EnabledCategoryIds = %v, want [1 2 -1]", money.EnabledCategoryIds)
+	}
+	if !slices.Equal(money.IncomeEnabledCategoryIds, []int64{3, -2, -4}) {
+		t.Fatalf("IncomeEnabledCategoryIds = %v, want [3 -2 -4]", money.IncomeEnabledCategoryIds)
+	}
+	if !money.LinkTransactionsToCharts {
+		t.Fatal("LinkTransactionsToCharts = false, want true")
+	}
+}
+
+func TestMoneySettingsRejectNullRemovedAndUnknownFields(t *testing.T) {
+	db := openSettingsTestDB(t)
+	service := newTestService(db)
+	userID := insertSettingsTestUser(t, db, "alice", false)
+
+	for name, fields := range map[string]map[string]any{
+		"null enabled list":     {"enabledCategoryIds": nil},
+		"null link flag":        {"linkTransactionsToCharts": nil},
+		"removed hidden list":   {"disabledCategoryIds": []any{1}},
+		"removed hidden income": {"disabledIncomeCategoryIds": []any{1}},
+	} {
+		_, _, err := service.Put(context.Background(), userID, NamespaceMoney, "op-"+name, rawFields(t, fields))
+		if !errors.Is(err, ErrInvalidSettingPayload) {
+			t.Fatalf("%s: Put() error = %v, want ErrInvalidSettingPayload", name, err)
+		}
+	}
+}
+
+func TestMoneySettingsReadStoredPayloadWithLeftoverKeys(t *testing.T) {
+	db := openSettingsTestDB(t)
+	service := newTestService(db)
+	userID := insertSettingsTestUser(t, db, "alice", false)
+
+	if _, err := db.Exec(
+		`INSERT INTO userSettings (usersId, namespace, payload, updatedAt) VALUES (?, ?, ?, datetime('now'))`,
+		userID, NamespaceMoney, `{"enabledCategoryIds":[9,10,4],"incomeEnabledCategoryIds":[2,1,-1],"enabledAccountIds":[1,2],"disabledCategoryIds":[]}`,
+	); err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+
+	raw, err := service.Get(context.Background(), userID, NamespaceMoney)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	var money MoneySettings
+	if err := json.Unmarshal(raw, &money); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !slices.Equal(money.EnabledCategoryIds, []int64{9, 10, 4}) || !slices.Equal(money.IncomeEnabledCategoryIds, []int64{2, 1, -1}) {
+		t.Fatalf("stored selection = %v / %v", money.EnabledCategoryIds, money.IncomeEnabledCategoryIds)
+	}
+
+	if _, _, err := service.Put(context.Background(), userID, NamespaceMoney, "op-1", rawFields(t, map[string]any{"displayCurrency": "EUR"})); err != nil {
+		t.Fatalf("Put() over a payload with leftover keys error = %v", err)
 	}
 }
 

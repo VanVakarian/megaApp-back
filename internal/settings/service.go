@@ -58,26 +58,27 @@ type ExpenseChartYMaxSetting struct {
 }
 
 type MoneySettings struct {
-	DisplayCurrency           string                   `json:"displayCurrency"`
-	ChartRangeStart           *string                  `json:"chartRangeStart"`
-	ChartRangeEnd             *string                  `json:"chartRangeEnd"`
-	ExpenseChartYMax          *ExpenseChartYMaxSetting `json:"expenseChartYMax"`
-	ConvertToUnifiedCurrency  bool                     `json:"convertToUnifiedCurrency"`
-	DisabledCategoryIds       []*int64                 `json:"disabledCategoryIds"`
-	DisabledIncomeCategoryIds []*int64                 `json:"disabledIncomeCategoryIds"`
-	YearlyMode                bool                     `json:"yearlyMode"`
-	ShowByAccount             bool                     `json:"showByAccount"`
-	SuspensionFilter          string                   `json:"suspensionFilter"`
-	DisabledAccountIds        []int64                  `json:"disabledAccountIds"`
+	DisplayCurrency          string                   `json:"displayCurrency"`
+	ChartRangeStart          *string                  `json:"chartRangeStart"`
+	ChartRangeEnd            *string                  `json:"chartRangeEnd"`
+	ExpenseChartYMax         *ExpenseChartYMaxSetting `json:"expenseChartYMax"`
+	ConvertToUnifiedCurrency bool                     `json:"convertToUnifiedCurrency"`
+	EnabledCategoryIds       []int64                  `json:"enabledCategoryIds"`
+	IncomeEnabledCategoryIds []int64                  `json:"incomeEnabledCategoryIds"`
+	LinkTransactionsToCharts bool                     `json:"linkTransactionsToCharts"`
+	YearlyMode               bool                     `json:"yearlyMode"`
+	ShowByAccount            bool                     `json:"showByAccount"`
+	SuspensionFilter         string                   `json:"suspensionFilter"`
+	DisabledAccountIds       []int64                  `json:"disabledAccountIds"`
 }
 
 func defaultMoneySettings() *MoneySettings {
 	return &MoneySettings{
-		DisplayCurrency:           "RUB",
-		DisabledCategoryIds:       []*int64{},
-		DisabledIncomeCategoryIds: []*int64{},
-		SuspensionFilter:          "all",
-		DisabledAccountIds:        []int64{},
+		DisplayCurrency:          "RUB",
+		EnabledCategoryIds:       []int64{},
+		IncomeEnabledCategoryIds: []int64{},
+		SuspensionFilter:         "all",
+		DisabledAccountIds:       []int64{},
 	}
 }
 

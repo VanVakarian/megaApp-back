@@ -71,14 +71,13 @@ func (s *Service) GetSnapshot(ctx context.Context, userID int64) (Snapshot, erro
 	}
 
 	return Snapshot{
-		Currencies:        currencies,
-		Categories:        categories,
-		Organizations:     organizations,
-		Accounts:          accounts,
-		Assets:            assets,
-		InvestAssetTrades: investAssetTrades,
-		Transactions:      transactions,
-		RateHistory:       s.filterSnapshotRateHistory(rateHistory, currencies, investAssetTrades),
+		Currencies:    currencies,
+		Categories:    categories,
+		Organizations: organizations,
+		Accounts:      accounts,
+		Assets:        assets,
+		Transactions:  transactions,
+		RateHistory:   s.filterSnapshotRateHistory(rateHistory, currencies, investAssetTrades),
 	}, nil
 }
 
@@ -187,17 +186,8 @@ func (s *Service) CreateCategory(ctx context.Context, userID int64, input Catego
 	if err != nil {
 		return 0, err
 	}
-	if normalized.ParentID != nil {
-		parentCategory, err := s.repo.GetCategoryByID(ctx, userID, *normalized.ParentID)
-		if err != nil {
-			return 0, err
-		}
-		if parentCategory == nil {
-			return 0, legacy.NewError(legacy.ErrorKindValidation, "Parent category not found")
-		}
-		if parentCategory.CategoryType != normalized.CategoryType {
-			return 0, legacy.NewError(legacy.ErrorKindValidation, "Parent category type must match categoryType")
-		}
+	if err := s.ensureCategoryParent(ctx, userID, 0, normalized); err != nil {
+		return 0, err
 	}
 	return s.repo.CreateCategory(ctx, userID, normalized)
 }
@@ -215,22 +205,42 @@ func (s *Service) UpdateCategory(ctx context.Context, userID int64, categoryID i
 	if err != nil {
 		return err
 	}
-	if normalized.ParentID != nil && *normalized.ParentID == categoryID {
-		return legacy.NewError(legacy.ErrorKindValidation, "Parent category cannot be the same as the category")
+	if err := s.ensureCategoryParent(ctx, userID, categoryID, normalized); err != nil {
+		return err
 	}
-	if normalized.ParentID != nil {
-		parentCategory, err := s.repo.GetCategoryByID(ctx, userID, *normalized.ParentID)
+	// A transaction's category must be of the transaction's kind; retyping a used category would break it.
+	if normalized.CategoryType != existing.CategoryType {
+		linkedTransactionsCount, err := s.repo.CountTransactionsByCategory(ctx, userID, categoryID)
 		if err != nil {
 			return err
 		}
-		if parentCategory == nil {
-			return legacy.NewError(legacy.ErrorKindValidation, "Parent category not found")
-		}
-		if parentCategory.CategoryType != normalized.CategoryType {
-			return legacy.NewError(legacy.ErrorKindValidation, "Parent category type must match categoryType")
+		if linkedTransactionsCount > 0 {
+			return legacy.NewError(legacy.ErrorKindConflict, "Category type cannot change while transactions use the category")
 		}
 	}
 	return s.repo.UpdateCategory(ctx, userID, categoryID, normalized)
+}
+
+// ensureCategoryParent checks the parent a category's input references. selfID is 0 for a
+// category being created.
+func (s *Service) ensureCategoryParent(ctx context.Context, userID int64, selfID int64, input CategoryInput) error {
+	if input.ParentID == nil {
+		return nil
+	}
+	if *input.ParentID == selfID {
+		return legacy.NewError(legacy.ErrorKindValidation, "Parent category cannot be the same as the category")
+	}
+	parentCategory, err := s.repo.GetCategoryByID(ctx, userID, *input.ParentID)
+	if err != nil {
+		return err
+	}
+	if parentCategory == nil {
+		return legacy.NewError(legacy.ErrorKindValidation, "Parent category not found")
+	}
+	if parentCategory.CategoryType != input.CategoryType {
+		return legacy.NewError(legacy.ErrorKindValidation, "Parent category type must match categoryType")
+	}
+	return nil
 }
 
 func (s *Service) DeleteCategory(ctx context.Context, userID int64, categoryID int64) error {
@@ -391,10 +401,6 @@ func (s *Service) DeleteAsset(ctx context.Context, userID int64, assetID int64) 
 
 func (s *Service) GetTransactions(ctx context.Context, userID int64) ([]Transaction, error) {
 	return s.repo.ListTransactions(ctx, userID)
-}
-
-func (s *Service) GetInvestAssetTrades(ctx context.Context, userID int64) ([]InvestAssetTrade, error) {
-	return s.repo.ListInvestAssetTrades(ctx, userID)
 }
 
 func (s *Service) GetRateHistory(ctx context.Context) ([]RateHistory, error) {
@@ -941,8 +947,12 @@ func validateCategoryInput(input CategoryInput) (CategoryInput, error) {
 	if input.ParentID != nil && *input.ParentID <= 0 {
 		return CategoryInput{}, legacy.NewError(legacy.ErrorKindValidation, "Parent category not found")
 	}
+	if input.Hue != nil && (*input.Hue < 0 || *input.Hue > 360) {
+		return CategoryInput{}, legacy.NewError(legacy.ErrorKindValidation, "hue must be between 0 and 360")
+	}
 
-	return CategoryInput{Name: name, ParentID: input.ParentID, CategoryType: input.CategoryType}, nil
+	input.Name = name
+	return input, nil
 }
 
 func validateAccountInput(input AccountInput) (AccountInput, error) {

@@ -60,10 +60,12 @@ type Currency struct {
 }
 
 type Category struct {
-	ID           int64        `json:"id"`
-	Name         string       `json:"name"`
-	ParentID     *int64       `json:"parentId"`
-	CategoryType CategoryType `json:"categoryType"`
+	ID             int64        `json:"id"`
+	Name           string       `json:"name"`
+	ParentID       *int64       `json:"parentId"`
+	CategoryType   CategoryType `json:"categoryType"`
+	HiddenOnCharts bool         `json:"hiddenOnCharts"`
+	Hue            *int64       `json:"hue"`
 }
 
 type Account struct {
@@ -127,14 +129,13 @@ type SnapshotRateHistory struct {
 }
 
 type Snapshot struct {
-	Currencies        []Currency            `json:"currencies"`
-	Categories        []Category            `json:"categories"`
-	Organizations     []Organization        `json:"organizations"`
-	Accounts          []Account             `json:"accounts"`
-	Assets            []Asset               `json:"assets"`
-	InvestAssetTrades []InvestAssetTrade    `json:"investAssetTrades"`
-	Transactions      []Transaction         `json:"transactions"`
-	RateHistory       []SnapshotRateHistory `json:"rateHistory"`
+	Currencies    []Currency            `json:"currencies"`
+	Categories    []Category            `json:"categories"`
+	Organizations []Organization        `json:"organizations"`
+	Accounts      []Account             `json:"accounts"`
+	Assets        []Asset               `json:"assets"`
+	Transactions  []Transaction         `json:"transactions"`
+	RateHistory   []SnapshotRateHistory `json:"rateHistory"`
 }
 
 type OrganizationInput struct {
@@ -151,9 +152,11 @@ type CurrencyInput struct {
 }
 
 type CategoryInput struct {
-	Name         string       `json:"name"`
-	ParentID     *int64       `json:"parentId"`
-	CategoryType CategoryType `json:"categoryType"`
+	Name           string       `json:"name"`
+	ParentID       *int64       `json:"parentId"`
+	CategoryType   CategoryType `json:"categoryType"`
+	HiddenOnCharts bool         `json:"hiddenOnCharts"`
+	Hue            *int64       `json:"hue"`
 }
 
 type AccountInput struct {

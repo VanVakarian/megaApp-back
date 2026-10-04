@@ -50,7 +50,6 @@ func RegisterRoutes(router chi.Router, authService *auth.Service, handler *Handl
 		r.Delete("/assets/{id}", handler.DeleteAsset)
 
 		r.Get("/transactions", handler.GetTransactions)
-		r.Get("/trades", handler.GetInvestAssetTrades)
 		r.Get("/rate-history", handler.GetRateHistory)
 		r.Post("/transactions", handler.CreateTransaction)
 		r.Put("/transactions/{id}", handler.UpdateTransaction)
@@ -504,22 +503,6 @@ func (h *Handler) GetTransactions(w http.ResponseWriter, r *http.Request) {
 	response, err := h.service.GetTransactions(r.Context(), claims.UserID)
 	if err != nil {
 		writeAppError(w, err, http.StatusInternalServerError, "Failed to get transactions")
-		return
-	}
-
-	writeSuccessData(w, http.StatusOK, response)
-}
-
-func (h *Handler) GetInvestAssetTrades(w http.ResponseWriter, r *http.Request) {
-	claims, ok := auth.UserClaimsFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	response, err := h.service.GetInvestAssetTrades(r.Context(), claims.UserID)
-	if err != nil {
-		writeAppError(w, err, http.StatusInternalServerError, "Failed to get invest asset trades")
 		return
 	}
 

@@ -182,6 +182,7 @@ func (s *LabService) generateProductFromCatalogueID(ctx context.Context, catalog
 	if !updated {
 		return nil, legacy.NewError(legacy.ErrorKindNotFound, "Product not found")
 	}
+	s.food.catalogueChanged()
 	result.Saved = true
 	result.PreviousData = map[string]any{"id": entry.ID, "name": entry.Name, "legacyName": nullableStringPtr(entry.LegacyName), "kcals": entry.Kcals}
 	return result, nil
@@ -238,6 +239,7 @@ func (s *LabService) generateProductBatch(ctx context.Context, nextN int, useKca
 				failedCount++
 				continue
 			}
+			s.food.catalogueChanged()
 			item["saved"] = true
 		}
 		results = append(results, item)
@@ -302,6 +304,7 @@ func (s *LabService) GenerateEmbeddings(ctx context.Context, count int) (*LabGen
 			failedCount++
 			continue
 		}
+		s.food.catalogueChanged()
 		item["saved"] = true
 		results = append(results, item)
 		successCount++
@@ -533,6 +536,7 @@ func (s *DebugService) ImportCatalogue(ctx context.Context, filename string) (ma
 	if len(payload.Entries) == 0 {
 		return nil, legacy.NewError(legacy.ErrorKindValidation, "Invalid backup file format - missing entries array")
 	}
+	defer s.food.catalogueChanged()
 	deletedCount, err := s.repo.ClearAllCatalogueEntries(ctx)
 	if err != nil {
 		return nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to clear existing catalogue entries", err)

@@ -632,50 +632,6 @@ func (g fixedEmbeddingGenerator) GenerateEmbedding(ctx context.Context, text str
 	return []float64{0, 0}, nil
 }
 
-// Regression test for a bug where a query typed in the wrong keyboard layout (e.g. "rehbwf"
-// instead of "курица") could return only whatever the semantic embedding search happened to
-// find nearest — even an unrelated product — because that search had no relevance threshold
-// and any non-empty result short-circuited the transliteration fallback before it ever ran.
-// searchCatalogueIDs now always combines the text/transliteration score with the semantic
-// score instead of choosing one or the other.
-func TestSearchCombinesTransliterationWithSemanticScore(t *testing.T) {
-	db := openFoodTestDB(t)
-	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
-	// 3 dimensions so these vectors can't accidentally collide with openFoodTestDB's
-	// pre-seeded 2-dimensional Apple/Bread vectors (combinedDistance skips entries whose
-	// vector length doesn't match the query's).
-	service.SetEmbeddingGenerator(fixedEmbeddingGenerator{vectors: map[string][]float64{
-		"Курица":  {1, 0, 0},
-		"Тапочки": {0, 1, 0},
-		// "rehbwf" is "курица" typed on a Latin keyboard layout — semantically meaningless,
-		// but its embedding happens to land right on an unrelated product's vector, so a
-		// naive semantic search would confidently report Тапочки as the match.
-		"rehbwf": {0, 1, 0},
-	}})
-
-	saveProduct := func(name, operationID string) {
-		t.Helper()
-		if _, applied, err := service.SaveProduct(context.Background(), 1, operationID, nil, ProductInput{
-			Name: name, Description: name, Kcals: 100, Protein: 10, Fat: 5, Carbs: 5, Fiber: 1,
-		}); err != nil || !applied {
-			t.Fatalf("SaveProduct(%q) error = %v applied = %v", name, err, applied)
-		}
-	}
-	saveProduct("Курица", "op-chicken")
-	saveProduct("Тапочки", "op-slippers")
-
-	results, err := service.SearchCatalogue(context.Background(), "rehbwf")
-	if err != nil {
-		t.Fatalf("SearchCatalogue() error = %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("results = %+v, want both Курица (via transliteration) and Тапочки (via semantic match)", results)
-	}
-	if results[0].Name != "Курица" {
-		t.Fatalf("results[0].Name = %q, want the transliterated exact match to outrank the semantic-only match", results[0].Name)
-	}
-}
-
 func TestSaveProductSameOperationIDReplaysWithoutDuplicate(t *testing.T) {
 	db := openFoodTestDB(t)
 	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))

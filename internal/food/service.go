@@ -28,7 +28,7 @@ type Service struct {
 	idempotency            *idempotency.Store
 	statsCache             *StatsCache
 	catalogueCache         *CatalogueCache
-	searchCache            *SearchCache
+	searchIndex            searchIndexHolder
 	productGenerator       ProductGenerator
 	embeddingGenerator     EmbeddingGenerator
 	adminChecker           AdminChecker
@@ -164,7 +164,7 @@ type CatalogueEntry struct {
 }
 
 func NewService(repo *Repository, idempotencyStore *idempotency.Store) *Service {
-	return &Service{repo: repo, idempotency: idempotencyStore, statsCache: NewStatsCache(), catalogueCache: NewCatalogueCache(), searchCache: NewSearchCache(), clock: clockplatform.NewRealClock(), personalKcalConfig: DefaultPersonalKcalConfig()}
+	return &Service{repo: repo, idempotency: idempotencyStore, statsCache: NewStatsCache(), catalogueCache: NewCatalogueCache(), clock: clockplatform.NewRealClock(), personalKcalConfig: DefaultPersonalKcalConfig()}
 }
 
 func (s *Service) SetProductGenerator(generator ProductGenerator) {

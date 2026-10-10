@@ -131,7 +131,11 @@ func TestArchiveSearchBypassesResultsCache(t *testing.T) {
 	if _, _, err := service.SearchCatalogueRealtime(ctx, adminUserID, "apple-semantic", true); err != nil {
 		t.Fatalf("archive search error = %v", err)
 	}
-	if cached, ok := service.searchCache.Get("apple-semantic"); ok {
+	index, err := service.searchIndex.Get(ctx, service.buildSearchIndex)
+	if err != nil {
+		t.Fatalf("searchIndex.Get() error = %v", err)
+	}
+	if cached, ok := index.results.Get("apple-semantic"); ok {
 		t.Fatalf("archive search wrote the results cache: %v", cached)
 	}
 
@@ -145,7 +149,7 @@ func TestArchiveSearchBypassesResultsCache(t *testing.T) {
 	if !applied || !slices.Equal(ids, []int64{archivedItemID}) {
 		t.Fatalf("archive search = %v (applied %v), want [3] (not the cached normal result)", ids, applied)
 	}
-	if cached, _ := service.searchCache.Get("apple-semantic"); !slices.Equal(cached, []int64{1}) {
+	if cached, _ := index.results.Get("apple-semantic"); !slices.Equal(cached, []int64{1}) {
 		t.Fatalf("cached normal result = %v, want [1] untouched by archive search", cached)
 	}
 }

@@ -2,11 +2,10 @@ package food
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"math"
-	"sort"
+	"log/slog"
 	"strings"
 
 	"megaapp-back/internal/httpx/legacy"
@@ -21,11 +20,6 @@ type ProductPreviewData struct {
 	Fiber           float64 `json:"fiber"`
 	Description     string  `json:"description"`
 	Confidence      float64 `json:"confidence"`
-}
-
-type scoredCatalogueEntry struct {
-	entry CatalogueEntry
-	score int
 }
 
 func (s *Service) SearchCatalogue(ctx context.Context, query string) ([]CatalogueEntry, error) {
@@ -208,8 +202,7 @@ func (s *Service) SaveProduct(ctx context.Context, userID int64, operationID str
 		if err := tx.Commit(); err != nil {
 			return nil, false, fmt.Errorf("commit catalogue save: %w", err)
 		}
-		s.searchCache.Clear()
-		s.catalogueCache.Invalidate()
+		s.catalogueChanged()
 		applied = true
 	}
 
@@ -281,10 +274,16 @@ func (s *Service) DeleteProduct(ctx context.Context, userID int64, operationID s
 	}
 
 	if deleted {
-		s.searchCache.Clear()
-		s.catalogueCache.Invalidate()
+		s.catalogueChanged()
 	}
 	return deleted, true, nil
+}
+
+// catalogueChanged is the one place every catalogue write reports to: it drops the cached catalogue
+// and the search index, so the next read of either starts from the database.
+func (s *Service) catalogueChanged() {
+	s.catalogueCache.Invalidate()
+	s.searchIndex.Invalidate()
 }
 
 // searchCatalogueIDs ranks the products of one mode: normal (archived == false) skips archived
@@ -295,157 +294,80 @@ func (s *Service) searchCatalogueIDs(ctx context.Context, query string, archived
 	if normalizedQuery == "" {
 		return []int64{}, nil
 	}
+
+	index, err := s.searchIndex.Get(ctx, s.buildSearchIndex)
+	if err != nil {
+		return nil, err
+	}
 	if !archived {
-		if cached, ok := s.searchCache.Get(normalizedQuery); ok {
+		if cached, ok := index.results.Get(normalizedQuery); ok {
 			return cached, nil
 		}
 	}
 
-	catalogue, err := s.GetCatalogue(ctx)
-	if err != nil {
+	// A vector that cannot be obtained (OpenAI down) is not an error for the user: the products whose
+	// name starts with a query word are still found. A result built without the vector is not cached,
+	// so the next search of the query tries the vector again. A database failure is an error.
+	queryVector, err := s.queryVector(ctx, normalizedQuery)
+	switch {
+	case errors.Is(err, errQueryVectorUnavailable):
+		slog.WarnContext(ctx, "food search: query vector unavailable, ranking by name only", "query", normalizedQuery, "error", err)
+	case err != nil:
 		return nil, err
 	}
 
-	semanticScores, err := s.semanticScoresByID(ctx, normalizedQuery)
-	if err != nil {
-		return nil, err
-	}
-
-	normalizedTokens := splitSearchTokens(normalizedQuery)
-	transliteratedQuery := transliterateEnToRu(normalizedQuery)
-	transliteratedTokens := splitSearchTokens(transliteratedQuery)
-	scored := make([]scoredCatalogueEntry, 0, len(catalogue))
-	for _, entry := range catalogue {
-		if entry.Archived != archived {
-			continue
-		}
-		score := scoreCatalogueEntry(entry, normalizedQuery, normalizedTokens, transliteratedQuery, transliteratedTokens)
-		score += semanticScores[entry.ID]
-		if score == 0 {
-			continue
-		}
-		scored = append(scored, scoredCatalogueEntry{entry: entry, score: score})
-	}
-
-	sort.Slice(scored, func(i int, j int) bool {
-		if scored[i].score == scored[j].score {
-			return scored[i].entry.Name < scored[j].entry.Name
-		}
-		return scored[i].score > scored[j].score
-	})
-
-	limit := 30
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
-	ids := make([]int64, 0, len(scored))
-	for _, item := range scored {
-		ids = append(ids, item.entry.ID)
-	}
-
-	if !archived {
-		s.searchCache.Set(normalizedQuery, ids)
+	ids := index.search(searchWords(normalizedQuery), queryVector, archived, searchWordLift)
+	if !archived && queryVector != nil {
+		index.results.Set(normalizedQuery, ids)
 	}
 	return ids, nil
 }
 
-// semanticScoreWeight converts a semantic (embedding) similarity into the same points
-// scale scoreField uses, so it can be added directly to the text/transliteration score
-// instead of gating it — a close semantic match (similarity near 1) is worth roughly
-// as much as a prefix match, a distant one contributes close to nothing.
-const semanticScoreWeight = 500
+// errQueryVectorUnavailable marks a query vector that could not be produced by the embedding generator.
+var errQueryVectorUnavailable = errors.New("query vector unavailable")
 
-// semanticScoresByID returns a similarity score per catalogue ID for the query's embedding.
-// A nil map (no error) means no embedding is available for this query — callers should
-// treat every entry as scoring 0 from this signal and rely on text/transliteration alone.
-func (s *Service) semanticScoresByID(ctx context.Context, query string) (map[int64]int, error) {
+func (s *Service) buildSearchIndex(ctx context.Context) (*searchIndex, error) {
+	rows, err := s.repo.GetSearchIndexRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return newSearchIndex(rows), nil
+}
+
+// queryVector returns the unit embedding of the query: from the cache table, or from the embedding
+// generator when the query is new or its cached vector is unusable (malformed or all zeros — the
+// fresh vector then replaces the bad row). It is nil, without an error, only when no generator is
+// configured; a generator failure or an unusable generated vector is errQueryVectorUnavailable; a
+// failed database read is returned as it is.
+func (s *Service) queryVector(ctx context.Context, query string) ([]float32, error) {
 	embeddingBlob, err := s.repo.GetQueryEmbedding(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if len(embeddingBlob) == 0 {
-		if s.embeddingGenerator == nil {
-			return nil, nil
-		}
-		embedding, err := s.embeddingGenerator.GenerateEmbedding(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-		embeddingBlob = encodeFloat32Blob(embedding)
-		if err := s.repo.SaveQueryEmbedding(ctx, query, embeddingBlob); err != nil {
-			return nil, err
-		}
-	} else {
+	if vector := decodeUnitVector(embeddingBlob); vector != nil {
 		// Best-effort popularity counter — losing an increment on failure isn't worth failing
 		// the search itself over.
 		_ = s.repo.RecordQueryEmbeddingHit(ctx, query)
+		return vector, nil
 	}
-	queryVector := decodeFloat32Blob(embeddingBlob)
-	if len(queryVector) == 0 {
+
+	if s.embeddingGenerator == nil {
 		return nil, nil
 	}
-
-	rows, err := s.repo.GetSearchVectors(ctx)
+	embedding, err := s.embeddingGenerator.GenerateEmbedding(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", errQueryVectorUnavailable, err)
 	}
-
-	scores := make(map[int64]int, len(rows))
-	for _, row := range rows {
-		nameVector := decodeFloat32Blob(row.NameVector)
-		descriptionVector := decodeFloat32Blob(row.DescriptionVec)
-		distance, ok := combinedDistance(queryVector, nameVector, descriptionVector)
-		if !ok {
-			continue
-		}
-		if similarity := 1 - distance; similarity > 0 {
-			scores[row.ID] = int(similarity * semanticScoreWeight)
-		}
+	embeddingBlob = encodeFloat32Blob(embedding)
+	vector := decodeUnitVector(embeddingBlob)
+	if vector == nil {
+		return nil, fmt.Errorf("%w: the embedding generator returned an empty or zero vector", errQueryVectorUnavailable)
 	}
-	return scores, nil
-}
-
-func scoreCatalogueEntry(entry CatalogueEntry, query string, tokens []string, transliteratedQuery string, transliteratedTokens []string) int {
-	name := normalizeSearchText(entry.Name)
-	legacy := normalizeSearchText(nullableStringOrEmpty(entry.LegacyName))
-	description := normalizeSearchText(entry.Description)
-
-	score := 0
-	score += scoreField(name, query, tokens, 1000, 500, 80, 140)
-	score += scoreField(legacy, query, transliteratedTokens, 850, 420, 70, 120)
-	score += scoreField(description, query, tokens, 120, 80, 20, 40)
-	if transliteratedQuery != query {
-		score += scoreField(name, transliteratedQuery, transliteratedTokens, 700, 300, 60, 100)
-		score += scoreField(legacy, query, tokens, 700, 300, 60, 100)
+	// The vector is already in hand, so a failed cache write only costs a repeated embedding later.
+	if err := s.repo.SaveQueryEmbedding(ctx, query, embeddingBlob); err != nil {
+		slog.WarnContext(ctx, "food search: query vector was not cached", "query", query, "error", err)
 	}
-	return score
-}
-
-func scoreField(field string, query string, tokens []string, exact int, prefix int, tokenScore int, allTokens int) int {
-	if field == "" || query == "" {
-		return 0
-	}
-	if field == query {
-		return exact
-	}
-	score := 0
-	if strings.HasPrefix(field, query) {
-		score += prefix
-	}
-	matched := 0
-	for _, token := range tokens {
-		if token == "" {
-			continue
-		}
-		if strings.Contains(field, token) {
-			score += tokenScore
-			matched++
-		}
-	}
-	if matched > 0 && matched == len(tokens) {
-		score += allTokens
-	}
-	return score
+	return vector, nil
 }
 
 func (s *Service) generateProductEmbeddings(ctx context.Context, input ProductInput) ([]byte, []byte, error) {
@@ -498,80 +420,4 @@ func utfLen(value string) int {
 func normalizeSearchText(value string) string {
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
 	return strings.Join(fields, " ")
-}
-
-func splitSearchTokens(value string) []string {
-	if value == "" {
-		return nil
-	}
-	return strings.Fields(value)
-}
-
-func nullableStringOrEmpty(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-var enToRuTransliterationRules = map[rune]rune{
-	'q': 'й', 'w': 'ц', 'e': 'у', 'r': 'к', 't': 'е', 'y': 'н', 'u': 'г', 'i': 'ш', 'o': 'щ', 'p': 'з', '[': 'х', ']': 'ъ',
-	'a': 'ф', 's': 'ы', 'd': 'в', 'f': 'а', 'g': 'п', 'h': 'р', 'j': 'о', 'k': 'л', 'l': 'д', ';': 'ж', '\'': 'э',
-	'z': 'я', 'x': 'ч', 'c': 'с', 'v': 'м', 'b': 'и', 'n': 'т', 'm': 'ь', ',': 'б', '.': 'ю',
-}
-
-func transliterateEnToRu(text string) string {
-	runes := []rune(strings.ToLower(text))
-	for idx, r := range runes {
-		if mapped, ok := enToRuTransliterationRules[r]; ok {
-			runes[idx] = mapped
-		}
-	}
-	return string(runes)
-}
-
-func decodeFloat32Blob(blob []byte) []float64 {
-	if len(blob) == 0 || len(blob)%4 != 0 {
-		return nil
-	}
-	result := make([]float64, 0, len(blob)/4)
-	for idx := 0; idx < len(blob); idx += 4 {
-		bits := binary.LittleEndian.Uint32(blob[idx : idx+4])
-		result = append(result, float64(math.Float32frombits(bits)))
-	}
-	return result
-}
-
-func combinedDistance(query []float64, nameVector []float64, descriptionVector []float64) (float64, bool) {
-	hasName := len(nameVector) == len(query) && len(nameVector) > 0
-	hasDescription := len(descriptionVector) == len(query) && len(descriptionVector) > 0
-	if !hasName && !hasDescription {
-		return 0, false
-	}
-	if hasName && hasDescription {
-		return cosineDistance(query, nameVector)*0.5 + cosineDistance(query, descriptionVector)*0.5, true
-	}
-	if hasName {
-		return cosineDistance(query, nameVector), true
-	}
-	return cosineDistance(query, descriptionVector), true
-}
-
-func cosineDistance(a []float64, b []float64) float64 {
-	if len(a) == 0 || len(a) != len(b) {
-		return 1
-	}
-	dot := 0.0
-	normA := 0.0
-	normB := 0.0
-	for idx := range a {
-		dot += a[idx] * b[idx]
-		normA += a[idx] * a[idx]
-		normB += b[idx] * b[idx]
-	}
-	normProduct := math.Sqrt(normA) * math.Sqrt(normB)
-	if normProduct == 0 {
-		return 1
-	}
-	return 1 - dot/normProduct
 }

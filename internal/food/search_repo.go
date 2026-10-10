@@ -3,21 +3,16 @@ package food
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
-type SearchVectorRow struct {
+type SearchIndexRow struct {
 	ID             int64
 	Name           string
-	Kcals          int64
-	Protein        float64
-	Fat            float64
-	Carbs          float64
-	Fiber          float64
-	Description    string
-	LegacyName     *string
-	NameVector     []byte
+	Archived       bool
+	NameVec        []byte
 	DescriptionVec []byte
 }
 
@@ -26,7 +21,10 @@ func (r *Repository) GetQueryEmbedding(ctx context.Context, query string) ([]byt
 
 	var embedding []byte
 	if err := row.Scan(&embedding); err != nil {
-		return nil, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get query embedding: %w", err)
 	}
 
 	return embedding, nil
@@ -58,33 +56,27 @@ func (r *Repository) SaveQueryEmbedding(ctx context.Context, query string, embed
 	return nil
 }
 
-func (r *Repository) GetSearchVectors(ctx context.Context) ([]SearchVectorRow, error) {
+func (r *Repository) GetSearchIndexRows(ctx context.Context) ([]SearchIndexRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, kcals, protein, fat, carbs, fiber, description, legacyName, nameVec, descriptionVec
+		SELECT id, name, archived, nameVec, descriptionVec
 		FROM foodCatalogue
-		WHERE nameVec IS NOT NULL OR descriptionVec IS NOT NULL
 		ORDER BY name ASC
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("get search vectors: %w", err)
+		return nil, fmt.Errorf("get search index rows: %w", err)
 	}
 	defer rows.Close()
 
-	result := make([]SearchVectorRow, 0)
+	result := make([]SearchIndexRow, 0)
 	for rows.Next() {
-		var row SearchVectorRow
-		var legacyName sql.NullString
-		if err := rows.Scan(&row.ID, &row.Name, &row.Kcals, &row.Protein, &row.Fat, &row.Carbs, &row.Fiber, &row.Description, &legacyName, &row.NameVector, &row.DescriptionVec); err != nil {
-			return nil, fmt.Errorf("scan search vector row: %w", err)
-		}
-		if legacyName.Valid {
-			value := legacyName.String
-			row.LegacyName = &value
+		var row SearchIndexRow
+		if err := rows.Scan(&row.ID, &row.Name, &row.Archived, &row.NameVec, &row.DescriptionVec); err != nil {
+			return nil, fmt.Errorf("scan search index row: %w", err)
 		}
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate search vector rows: %w", err)
+		return nil, fmt.Errorf("iterate search index rows: %w", err)
 	}
 	return result, nil
 }

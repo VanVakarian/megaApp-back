@@ -2,16 +2,18 @@ package food
 
 import "sync"
 
-type SearchCache struct {
+// searchResultsCache holds the ranked ids per query for one search index snapshot. It lives and dies
+// with the snapshot, so a catalogue change needs no separate cache clearing.
+type searchResultsCache struct {
 	mu     sync.RWMutex
 	values map[string][]int64
 }
 
-func NewSearchCache() *SearchCache {
-	return &SearchCache{values: make(map[string][]int64)}
+func newSearchResultsCache() *searchResultsCache {
+	return &searchResultsCache{values: make(map[string][]int64)}
 }
 
-func (c *SearchCache) Get(query string) ([]int64, bool) {
+func (c *searchResultsCache) Get(query string) ([]int64, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -25,18 +27,11 @@ func (c *SearchCache) Get(query string) ([]int64, bool) {
 	return result, true
 }
 
-func (c *SearchCache) Set(query string, ids []int64) {
+func (c *searchResultsCache) Set(query string, ids []int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	value := make([]int64, len(ids))
 	copy(value, ids)
 	c.values[query] = value
-}
-
-func (c *SearchCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.values = make(map[string][]int64)
 }

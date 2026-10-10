@@ -14,7 +14,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,8 +41,20 @@ type ImageRateLimitChecker interface {
 	CheckRateLimits(ctx context.Context) (map[string]any, error)
 }
 
+// ImageRequestOutcome tells the caller what became of a generation request, so none of the
+// refusals is silent. replace asks to generate even when the product already has an image.
+type ImageRequestOutcome string
+
+const (
+	ImageRequestQueued        ImageRequestOutcome = "queued"
+	ImageRequestAlreadyQueued ImageRequestOutcome = "already_queued"
+	ImageRequestHasImage      ImageRequestOutcome = "has_image"
+	ImageRequestQueueFull     ImageRequestOutcome = "queue_full"
+	ImageRequestDisabled      ImageRequestOutcome = "disabled"
+)
+
 type ImageGenerationRequester interface {
-	RequestProductImageGeneration(catalogueID int64, productName string, description string)
+	RequestProductImageGeneration(catalogueID int64, productName string, description string, replace bool) ImageRequestOutcome
 }
 
 type ImageVersionProvider interface {
@@ -81,33 +92,47 @@ type queueTask struct {
 }
 
 type ImagePipeline struct {
-	store        *ImageStore
-	generator    ImageGenerator
-	realtime     RealtimePublisher
-	logger       *slog.Logger
-	mu           sync.Mutex
-	queue        map[int64]*queueTask
-	queueOrder   []int64
-	closed       bool
-	notify       chan struct{}
-	stop         chan struct{}
-	maxQueueSize int
-	maxAttempts  int
-	rateLimit    time.Duration
+	store         *ImageStore
+	generator     ImageGenerator
+	realtime      RealtimePublisher
+	onImageReady  func()
+	logger        *slog.Logger
+	mu            sync.Mutex
+	queue         map[int64]*queueTask
+	queueOrder    []int64
+	closed        bool
+	notify        chan struct{}
+	stop          chan struct{}
+	maxQueueSize  int
+	maxAttempts   int
+	rateLimit     time.Duration
+	retryBaseWait time.Duration
 }
 
-func NewImagePipeline(store *ImageStore, generator ImageGenerator, realtime RealtimePublisher, maxAttempts int, logger *slog.Logger) *ImagePipeline {
+// retryWaitFactor multiplies the wait after every failed attempt: 5s, 20s, 80s with the default
+// base. The waits are long on purpose — a provider rate limit needs time to lift.
+const retryWaitFactor = 4
+
+// NewImagePipeline: generator must be nil (not a typed nil) when image generation is not
+// configured. onImageReady runs after every image change, before clients are told.
+func NewImagePipeline(store *ImageStore, generator ImageGenerator, realtime RealtimePublisher, onImageReady func(), maxAttempts int, logger *slog.Logger) *ImagePipeline {
+	return newImagePipeline(store, generator, realtime, onImageReady, maxAttempts, logger, time.Second, 5*time.Second)
+}
+
+func newImagePipeline(store *ImageStore, generator ImageGenerator, realtime RealtimePublisher, onImageReady func(), maxAttempts int, logger *slog.Logger, rateLimit time.Duration, retryBaseWait time.Duration) *ImagePipeline {
 	pipeline := &ImagePipeline{
-		store:        store,
-		generator:    generator,
-		realtime:     realtime,
-		logger:       logger,
-		queue:        map[int64]*queueTask{},
-		notify:       make(chan struct{}, 1),
-		stop:         make(chan struct{}),
-		maxQueueSize: 24,
-		maxAttempts:  maxAttempts,
-		rateLimit:    time.Second,
+		store:         store,
+		generator:     generator,
+		realtime:      realtime,
+		onImageReady:  onImageReady,
+		logger:        logger,
+		queue:         map[int64]*queueTask{},
+		notify:        make(chan struct{}, 1),
+		stop:          make(chan struct{}),
+		maxQueueSize:  24,
+		maxAttempts:   maxAttempts,
+		rateLimit:     rateLimit,
+		retryBaseWait: retryBaseWait,
 	}
 	go pipeline.run()
 	return pipeline
@@ -125,31 +150,30 @@ func (p *ImagePipeline) Close() error {
 	return nil
 }
 
-func (p *ImagePipeline) RequestProductImageGeneration(catalogueID int64, productName string, description string) {
-	if p == nil {
-		return
+func (p *ImagePipeline) RequestProductImageGeneration(catalogueID int64, productName string, description string, replace bool) ImageRequestOutcome {
+	if p == nil || p.generator == nil {
+		if p != nil {
+			p.logger.Warn("image generation skipped: generator not configured", "catalogueId", catalogueID)
+		}
+		return ImageRequestDisabled
 	}
-	if p.generator == nil {
-		p.logger.Warn("image generation skipped: generator not configured", "catalogueId", catalogueID)
-		return
-	}
-	if p.store.ImageVersion(catalogueID) != nil {
+	if !replace && p.store.ImageVersion(catalogueID) != nil {
 		p.logger.Debug("image generation skipped: image already exists", "catalogueId", catalogueID)
-		return
+		return ImageRequestHasImage
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return
+		return ImageRequestDisabled
 	}
 	if p.queue[catalogueID] != nil {
 		p.logger.Debug("image generation skipped: already queued", "catalogueId", catalogueID)
-		return
+		return ImageRequestAlreadyQueued
 	}
 	if len(p.queue) >= p.maxQueueSize {
 		p.logger.Warn("image generation skipped: queue is full", "catalogueId", catalogueID, "queueSize", len(p.queue))
-		return
+		return ImageRequestQueueFull
 	}
 	p.queue[catalogueID] = &queueTask{
 		catalogueID: catalogueID,
@@ -163,6 +187,7 @@ func (p *ImagePipeline) RequestProductImageGeneration(catalogueID int64, product
 	case p.notify <- struct{}{}:
 	default:
 	}
+	return ImageRequestQueued
 }
 
 func (p *ImagePipeline) run() {
@@ -237,21 +262,34 @@ func (p *ImagePipeline) processTask(task *queueTask) {
 		return
 	}
 
+	if p.recordFailedAttempt(task, err) {
+		p.realtime.PublishCatalogueImageFailed(task.catalogueID)
+	}
+}
+
+// recordFailedAttempt schedules the retry, or drops the task once the attempts are used up.
+// It reports whether the failure is final, so the caller can tell clients outside the lock.
+func (p *ImagePipeline) recordFailedAttempt(task *queueTask, err error) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	current := p.queue[task.catalogueID]
 	if current == nil {
-		return
+		return false
 	}
 	current.attempts++
 	if current.attempts >= p.maxAttempts {
-		p.logger.Error("image generation failed permanently", "catalogueId", task.catalogueID, "productName", task.productName, "attempts", current.attempts, "error", err)
+		p.logger.Error("image generation failed permanently", "catalogueId", task.catalogueID, "productName", task.productName, "attempts", current.attempts, "lastError", err)
 		delete(p.queue, task.catalogueID)
 		p.queueOrder = removeQueueID(p.queueOrder, task.catalogueID)
-		return
+		return true
 	}
-	p.logger.Warn("image generation attempt failed, retrying", "catalogueId", task.catalogueID, "productName", task.productName, "attempt", current.attempts, "maxAttempts", p.maxAttempts, "error", err)
-	current.availableAt = time.Now().Add(time.Duration(1<<max(0, current.attempts-1)) * time.Second)
+	wait := p.retryBaseWait
+	for range current.attempts - 1 {
+		wait *= retryWaitFactor
+	}
+	p.logger.Warn("image generation attempt failed, retrying", "catalogueId", task.catalogueID, "productName", task.productName, "attempt", current.attempts, "maxAttempts", p.maxAttempts, "retryIn", wait, "error", err)
+	current.availableAt = time.Now().Add(wait)
+	return false
 }
 
 func (p *ImagePipeline) removeTask(catalogueID int64) {
@@ -291,10 +329,24 @@ func (p *ImagePipeline) GenerateProductImage(ctx context.Context, catalogueID in
 		return nil, err
 	}
 	result.OriginalFilename = originalFilename
-	p.store.SetImageVersion(catalogueID, version)
-	p.realtime.PublishCatalogueImageGenerated(catalogueID, version, "")
+	p.publishImageReady(catalogueID, version)
+	// The previous image is removed only now that the new one is complete and announced, so a
+	// failed generation never costs the existing picture. A failed cleanup leaves harmless files.
+	if err := p.store.DeleteOldVersions(catalogueID, version); err != nil {
+		p.logger.Warn("old image versions cleanup failed", "catalogueId", catalogueID, "version", version, "error", err)
+	}
 	p.logger.Debug("image generation completed", "catalogueId", catalogueID, "version", version)
 	return result, nil
+}
+
+// publishImageReady switches the product to the new image version, bumps the catalogue version
+// (so a client that misses the event still refetches on its next catch-up) and then tells clients.
+func (p *ImagePipeline) publishImageReady(catalogueID int64, version int64) {
+	p.store.SetImageVersion(catalogueID, version)
+	if p.onImageReady != nil {
+		p.onImageReady()
+	}
+	p.realtime.PublishCatalogueImageGenerated(catalogueID, version, "")
 }
 
 func (p *ImagePipeline) RebuildImageVariants(ctx context.Context, catalogueID int64) (*ImageRebuildResult, error) {
@@ -328,8 +380,7 @@ func (p *ImagePipeline) RebuildImageVariants(ctx context.Context, catalogueID in
 	if err != nil {
 		return nil, err
 	}
-	p.store.SetImageVersion(catalogueID, newVersion)
-	p.realtime.PublishCatalogueImageGenerated(catalogueID, newVersion, "")
+	p.publishImageReady(catalogueID, newVersion)
 	return &ImageRebuildResult{
 		CatalogueID:      catalogueID,
 		Version:          newVersion,
@@ -350,9 +401,6 @@ func (p *ImagePipeline) persistGeneratedImage(catalogueID int64, version int64, 
 	}
 	bounds := decoded.Bounds()
 	p.logger.Debug("generated image decoded", "catalogueId", catalogueID, "width", bounds.Dx(), "height", bounds.Dy())
-	if err := p.store.DeleteOldVersions(catalogueID, version); err != nil {
-		return "", nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to clear old image versions", err)
-	}
 	originalFilename, err := p.store.SaveOriginal(catalogueID, version, generated.Format, generated.Data)
 	if err != nil {
 		return "", nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to save original image", err)
@@ -532,14 +580,4 @@ func buildFoodImagePrompt(productName string, description string) string {
 		text = name
 	}
 	return fmt.Sprintf("Абсолютно по центру изображения, идеально выровненный, крупный план продукта %s. %s. Объект находится точно по центру на светлой, слегка потертой и теплой на вид деревянной поверхности или на тактильно гладком, но не глянцевом мраморе с мелкими включениями. Мягкий, обволакивающий естественный свет из окна, подсвечивающий микро-текстуры продукта, малая глубина резкости, создающая бархатное боке, уютная и чистая эстетика. Сфокусировано по центру. Рядом, очень незаметно, несколько минималистичных акцентов, тонко раскрывающих его природную сущность или характерную свежесть, создавая ощущение тепла и домашнего уюта.", name, text)
-}
-
-type catalogueImageEntry struct {
-	ID          int64
-	Name        string
-	Description string
-}
-
-func sortCatalogueImageEntries(entries []catalogueImageEntry) {
-	sort.Slice(entries, func(i int, j int) bool { return entries[i].ID < entries[j].ID })
 }

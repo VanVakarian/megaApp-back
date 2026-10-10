@@ -312,50 +312,6 @@ func (s *LabService) GenerateEmbeddings(ctx context.Context, count int) (*LabGen
 	return &LabGenerateEmbeddingsResult{Data: results, BatchInfo: map[string]int{"totalRequested": count, "totalProcessed": len(entries), "successCount": successCount, "failedCount": failedCount}}, nil
 }
 
-func (s *LabService) GenerateImages(ctx context.Context, catalogueID int64, nextN int) (*LabGenerateImageResult, error) {
-	if s.pipeline == nil || s.pipeline.generator == nil {
-		return nil, legacy.NewError(legacy.ErrorKindValidation, "Image generation is disabled")
-	}
-	if catalogueID > 0 {
-		entry, err := s.repo.GetCatalogueEntry(ctx, catalogueID)
-		if err != nil {
-			return nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to load product", err)
-		}
-		if entry == nil {
-			return nil, legacy.NewError(legacy.ErrorKindNotFound, fmt.Sprintf("Catalogue entry with ID %d not found", catalogueID))
-		}
-		if s.pipeline.store.ImageVersion(catalogueID) != nil {
-			return nil, legacy.NewError(legacy.ErrorKindConflict, fmt.Sprintf("Image already exists for product %d", catalogueID))
-		}
-		generated, err := s.pipeline.GenerateProductImage(ctx, entry.ID, entry.Name, nullableStringValue(entry.Description))
-		if err != nil {
-			return nil, err
-		}
-		return &LabGenerateImageResult{Data: map[string]any{"catalogueId": entry.ID, "name": entry.Name, "imageData": generated}}, nil
-	}
-	entries, err := s.repo.GetCatalogueEntriesWithoutImages(ctx, s.pipeline.store.ExistingImageIDs(), nextN)
-	if err != nil {
-		return nil, legacy.WrapError(legacy.ErrorKindInternal, "Failed to load products without images", err)
-	}
-	if len(entries) == 0 {
-		return nil, legacy.NewError(legacy.ErrorKindNotFound, "No catalogue entries without images found")
-	}
-	results := make([]map[string]any, 0, len(entries))
-	successCount := 0
-	failedCount := 0
-	for _, entry := range entries {
-		generated, err := s.pipeline.GenerateProductImage(ctx, entry.ID, entry.Name, entry.Description)
-		if err != nil {
-			results = append(results, map[string]any{"id": entry.ID, "name": entry.Name, "generated": false, "error": legacy.ErrorMessageOf(err, "Failed to generate image")})
-			failedCount++
-			continue
-		}
-		results = append(results, map[string]any{"id": entry.ID, "name": entry.Name, "generated": true, "imageData": generated})
-		successCount++
-	}
-	return &LabGenerateImageResult{Data: results, BatchInfo: map[string]int{"totalRequested": nextN, "totalProcessed": len(entries), "successCount": successCount, "failedCount": failedCount}}, nil
-}
-
 func (s *LabService) RebuildImageVariants(ctx context.Context, catalogueID int64, nextN int) (*LabGenerateImageResult, error) {
 	if s.pipeline == nil {
 		return nil, legacy.NewError(legacy.ErrorKindValidation, "Image pipeline is not configured")

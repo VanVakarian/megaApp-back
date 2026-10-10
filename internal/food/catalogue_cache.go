@@ -8,7 +8,8 @@ import (
 // CatalogueCache holds the whole catalogue (minus per-entry ImageVersion, which is resolved
 // fresh on every read from ImageVersionProvider — cheap, in-memory, and lets image generation
 // stay decoupled from cache invalidation) plus a version counter. The counter only moves on an
-// actual write (Invalidate, called from SaveProduct/DeleteProduct) — it is the cheap "did the
+// actual change (Invalidate, called from SaveProduct/DeleteProduct, or BumpVersion when an image
+// becomes ready) — it is the cheap "did the
 // shared catalogue change" signal GET /api/food/catalogue/version answers for reconnect catch-up.
 // It starts from the launch time in milliseconds, so a restart never rewinds it to a value a
 // client has already seen (writes between restarts are far fewer than milliseconds elapsed).
@@ -45,6 +46,16 @@ func (c *CatalogueCache) Invalidate() {
 
 	c.version++
 	c.entries = nil
+}
+
+// BumpVersion moves only the version counter, leaving the cached entries in place. For changes
+// the cache does not hold (a new image: ImageVersion is resolved fresh on every read) that still
+// have to reach clients that missed the live event.
+func (c *CatalogueCache) BumpVersion() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.version++
 }
 
 func (c *CatalogueCache) Version() int64 {

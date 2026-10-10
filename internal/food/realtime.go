@@ -15,6 +15,7 @@ type RealtimePublisher interface {
 	PublishCatalogueEntrySaved(userID int64, entry CatalogueEntry, excludeClientID string)
 	PublishCatalogueEntryDeleted(catalogueID int64, excludeClientID string)
 	PublishCatalogueImageGenerated(catalogueID int64, imageVersion int64, excludeClientID string)
+	PublishCatalogueImageFailed(catalogueID int64)
 }
 
 type WSRealtimePublisher struct {
@@ -64,6 +65,10 @@ type catalogueImageGeneratedPayload struct {
 	ImageVersion int64 `json:"imageVersion"`
 }
 
+type catalogueImageFailedPayload struct {
+	CatalogueID int64 `json:"catalogueId"`
+}
+
 func (p *WSRealtimePublisher) MarkUserUpdated(userID int64) {
 	p.hub.SetSyncState(userID, p.clock.Now().UnixMilli())
 }
@@ -104,4 +109,8 @@ func (p *WSRealtimePublisher) PublishCatalogueEntryDeleted(catalogueID int64, ex
 
 func (p *WSRealtimePublisher) PublishCatalogueImageGenerated(catalogueID int64, imageVersion int64, excludeClientID string) {
 	p.hub.BroadcastToAll(wsEnvelope{Type: "CATALOGUE_IMAGE_GENERATED", Payload: catalogueImageGeneratedPayload{CatalogueID: catalogueID, ImageVersion: imageVersion}}, excludeClientID)
+}
+
+func (p *WSRealtimePublisher) PublishCatalogueImageFailed(catalogueID int64) {
+	p.hub.BroadcastToAll(wsEnvelope{Type: "CATALOGUE_IMAGE_FAILED", Payload: catalogueImageFailedPayload{CatalogueID: catalogueID}}, "")
 }

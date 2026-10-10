@@ -257,7 +257,12 @@ func buildFoodModule(read *sql.DB, write sqlite.WriteDB, cfg config.Config, logg
 		MaxGenerations:          cfg.PersonalKcalMaxGenerations,
 		MaxStale:                cfg.PersonalKcalMaxStale,
 	})
-	var mediaClient *food.OpenRouterMediaClient
+	// An interface variable, not the concrete client: left unset (no API key) it stays a true nil,
+	// which the pipeline and the debug service rely on to know the provider is not configured.
+	var mediaClient interface {
+		food.ImageGenerator
+		food.ImageRateLimitChecker
+	}
 	if strings.TrimSpace(cfg.OpenRouterAPIKey) != "" {
 		productGenerator, err := food.NewOpenRouterProductGenerator(food.OpenRouterProductGeneratorConfig{
 			APIKey:  cfg.OpenRouterAPIKey,
@@ -298,8 +303,9 @@ func buildFoodModule(read *sql.DB, write sqlite.WriteDB, cfg config.Config, logg
 	}
 	service.SetImageVersionProvider(imageStore)
 	realtime := food.NewWSRealtimePublisher(hub, clk)
-	imagePipeline := food.NewImagePipeline(imageStore, mediaClient, realtime, cfg.ImageGenerationMaxAttempts, logger)
+	imagePipeline := food.NewImagePipeline(imageStore, mediaClient, realtime, service.BumpCatalogueVersion, cfg.ImageGenerationMaxAttempts, logger)
 	service.SetImageGenerationRequester(imagePipeline)
+	service.LogProductsWithoutImage(context.Background(), logger)
 	hub.RegisterHandler("SEARCH_QUERY", food.NewSearchWSHandler(service, clk))
 	return foodModule{
 		service:          service,

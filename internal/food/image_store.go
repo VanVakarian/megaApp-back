@@ -88,17 +88,6 @@ func (s *ImageStore) SetImageVersion(catalogueID int64, version int64) {
 	s.mu.Unlock()
 }
 
-func (s *ImageStore) ExistingImageIDs() []int64 {
-	s.mu.RLock()
-	ids := make([]int64, 0, len(s.versions))
-	for id := range s.versions {
-		ids = append(ids, id)
-	}
-	s.mu.RUnlock()
-	sort.Slice(ids, func(i int, j int) bool { return ids[i] < ids[j] })
-	return ids
-}
-
 func (s *ImageStore) SaveOriginal(catalogueID int64, version int64, format string, data []byte) (string, error) {
 	filename := fmt.Sprintf("%d-original-v%d.%s", catalogueID, version, strings.ToLower(strings.TrimPrefix(format, ".")))
 	path := filepath.Join(s.origDir, filename)

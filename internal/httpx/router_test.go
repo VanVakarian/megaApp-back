@@ -125,6 +125,38 @@ func TestOpsRoutes(t *testing.T) {
 	if commitBody.CommitHash != cfg.BuildCommit || commitBody.CommitDateTime != cfg.BuildTime {
 		t.Fatalf("unexpected commit info body = %+v", commitBody)
 	}
+
+	assertServerOnlyRoute(t, server.URL+"/api/debug/ping")
+	assertServerOnlyRoute(t, server.URL+"/api/lab/rebuild-image-variants")
+}
+
+// assertServerOnlyRoute: a direct call passes the server-only gate, the same call carrying the
+// headers nginx adds to forwarded requests is refused.
+func assertServerOnlyRoute(t *testing.T, url string) {
+	t.Helper()
+
+	direct, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s error = %v", url, err)
+	}
+	defer direct.Body.Close()
+	if direct.StatusCode == http.StatusForbidden {
+		t.Fatalf("GET %s without proxy headers status = %d, want not 403", url, direct.StatusCode)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	request.Header.Set("X-Real-IP", "203.0.113.5")
+	proxied, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET %s error = %v", url, err)
+	}
+	defer proxied.Body.Close()
+	if proxied.StatusCode != http.StatusForbidden {
+		t.Fatalf("GET %s with proxy headers status = %d, want 403", url, proxied.StatusCode)
+	}
 }
 
 func assertStatus(t *testing.T, url string, wantStatus int, wantBodyStatus string) {

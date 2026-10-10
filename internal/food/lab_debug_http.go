@@ -34,7 +34,6 @@ func RegisterLabRoutes(router chi.Router, handler *LabHandler) {
 	router.Route("/api/lab", func(r chi.Router) {
 		r.Get("/generate-product", handler.GenerateProduct)
 		r.Get("/generate-embeddings", handler.GenerateEmbeddings)
-		r.Get("/generate-image", handler.GenerateImage)
 		r.Get("/rebuild-image-variants", handler.RebuildImageVariants)
 	})
 }
@@ -84,29 +83,6 @@ func (h *LabHandler) GenerateEmbeddings(w http.ResponseWriter, r *http.Request) 
 	result, err := h.service.GenerateEmbeddings(r.Context(), count)
 	if err != nil {
 		legacy.WriteAppResultError(w, err, http.StatusBadRequest, "Failed to generate embeddings")
-		return
-	}
-	legacy.WriteJSON(w, http.StatusOK, map[string]any{"result": true, "data": result.Data, "batchInfo": result.BatchInfo})
-}
-
-func (h *LabHandler) GenerateImage(w http.ResponseWriter, r *http.Request) {
-	catalogueID, err := optionalQueryInt64(r, "id")
-	if err != nil {
-		legacy.WriteAppResultError(w, err, http.StatusBadRequest, "Invalid id query parameter")
-		return
-	}
-	nextN, err := optionalQueryInt(r, "nextN")
-	if err != nil {
-		legacy.WriteAppResultError(w, err, http.StatusBadRequest, "Invalid nextN query parameter")
-		return
-	}
-	if catalogueID == 0 && nextN == 0 {
-		legacy.WriteResultError(w, http.StatusBadRequest, "Either id or nextN query parameter must be provided")
-		return
-	}
-	result, err := h.service.GenerateImages(r.Context(), catalogueID, nextN)
-	if err != nil {
-		legacy.WriteAppResultError(w, err, http.StatusBadRequest, "Failed to generate image")
 		return
 	}
 	legacy.WriteJSON(w, http.StatusOK, map[string]any{"result": true, "data": result.Data, "batchInfo": result.BatchInfo})

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"megaapp-back/internal/httpx/legacy"
@@ -211,9 +212,71 @@ func (s *Service) SaveProduct(ctx context.Context, userID int64, operationID str
 		return nil, false, legacy.WrapError(legacy.ErrorKindInternal, "Failed to load saved product", err)
 	}
 	if applied && entry != nil && catalogueID == nil && s.imageGenerationRequest != nil {
-		s.imageGenerationRequest.RequestProductImageGeneration(entry.ID, entry.Name, entry.Description)
+		s.imageGenerationRequest.RequestProductImageGeneration(entry.ID, entry.Name, entry.Description, false)
 	}
 	return entry, applied, nil
+}
+
+// RegenerateProductImage queues a new image for the product, replacing the current one once the
+// new one is ready. Admin only: generation costs money. The permission check goes first, ahead of
+// any lookup, as for the archive flag. Nothing is refused silently: every outcome that does not
+// queue the work is an error.
+func (s *Service) RegenerateProductImage(ctx context.Context, userID int64, catalogueID int64) (ImageRequestOutcome, error) {
+	isAdmin, err := s.isAdmin(ctx, userID)
+	if err != nil {
+		return "", legacy.WrapError(legacy.ErrorKindInternal, "Failed to check permissions", err)
+	}
+	if !isAdmin {
+		return "", legacy.NewError(legacy.ErrorKindForbidden, "Forbidden")
+	}
+
+	entry, err := s.repo.GetCatalogueEntry(ctx, catalogueID)
+	if err != nil {
+		return "", legacy.WrapError(legacy.ErrorKindInternal, "Failed to load product", err)
+	}
+	if entry == nil {
+		return "", legacy.NewError(legacy.ErrorKindNotFound, "product not found")
+	}
+
+	if s.imageGenerationRequest == nil {
+		return "", legacy.NewError(legacy.ErrorKindConflict, "Image generation is disabled")
+	}
+	outcome := s.imageGenerationRequest.RequestProductImageGeneration(entry.ID, entry.Name, nullableStringValue(entry.Description), true)
+	switch outcome {
+	case ImageRequestQueued, ImageRequestAlreadyQueued:
+		return outcome, nil
+	case ImageRequestQueueFull:
+		return "", legacy.NewError(legacy.ErrorKindTooManyRequests, "Image generation queue is full")
+	default:
+		return "", legacy.NewError(legacy.ErrorKindConflict, "Image generation is disabled")
+	}
+}
+
+// BumpCatalogueVersion tells reconnecting clients the catalogue changed without dropping the
+// cached entries or the search index: used when an image becomes ready, which neither holds.
+func (s *Service) BumpCatalogueVersion() {
+	s.catalogueCache.BumpVersion()
+}
+
+// LogProductsWithoutImage writes one warning listing the non-archived products that have no
+// image, so a silently failed generation of the past does not stay unnoticed. It never generates.
+func (s *Service) LogProductsWithoutImage(ctx context.Context, logger *slog.Logger) {
+	catalogue, err := s.GetCatalogue(ctx)
+	if err != nil {
+		logger.Warn("products without image check failed", "error", err)
+		return
+	}
+	ids := make([]int64, 0)
+	for id, entry := range catalogue {
+		if entry.ImageVersion == nil && !entry.Archived {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	slices.Sort(ids)
+	logger.Warn("products without image", "count", len(ids), "catalogueIds", ids)
 }
 
 func (s *Service) DeleteProduct(ctx context.Context, userID int64, operationID string, catalogueID int64) (deleted bool, applied bool, err error) {

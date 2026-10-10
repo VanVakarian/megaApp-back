@@ -143,10 +143,13 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger, clk clo
 	food.RegisterWriteRoutes(router, authModule.service, foodModule.writeHandler)
 	food.RegisterCatalogueRoutes(router, authModule.service, foodModule.catalogueHandler)
 	food.RegisterImageRoutes(router, foodModule.imageHandler)
-	food.RegisterLabRoutes(router, foodModule.labHandler)
-	food.RegisterDebugRoutes(router, foodModule.debugHandler)
-	quotes.RegisterDebugRoutes(router, quotesModule.debugHandler)
-	backup.RegisterDebugRoutes(router, backupModule.debugHandler)
+	router.Group(func(r chi.Router) {
+		r.Use(ServerOnlyMiddleware)
+		food.RegisterLabRoutes(r, foodModule.labHandler)
+		food.RegisterDebugRoutes(r, foodModule.debugHandler)
+		quotes.RegisterDebugRoutes(r, quotesModule.debugHandler)
+		backup.RegisterDebugRoutes(r, backupModule.debugHandler)
+	})
 	metrics.RegisterRoutes(router, authModule.service, metricsModule.historyHandler)
 	ws.RegisterRoutes(router, wsModule.handler)
 

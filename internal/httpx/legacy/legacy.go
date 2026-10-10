@@ -16,7 +16,8 @@ const (
 	ErrorKindForbidden       ErrorKind = "forbidden"
 	ErrorKindNotFound        ErrorKind = "not_found"
 	ErrorKindConflict        ErrorKind = "conflict"
-	ErrorKindInternal        ErrorKind = "internal"
+	ErrorKindTooManyRequests ErrorKind = "too_many_requests"
+	ErrorKindInternal       ErrorKind = "internal"
 	ErrorKindExternal        ErrorKind = "external"
 	ErrorKindRequestTooLarge ErrorKind = "request_too_large"
 )
@@ -86,6 +87,8 @@ func ErrorStatusCodeOf(err error, fallback int) int {
 		return http.StatusNotFound
 	case ErrorKindConflict:
 		return http.StatusConflict
+	case ErrorKindTooManyRequests:
+		return http.StatusTooManyRequests
 	case ErrorKindExternal:
 		return http.StatusBadGateway
 	case ErrorKindRequestTooLarge:

@@ -47,6 +47,7 @@ func RegisterCatalogueRoutes(router chi.Router, authService *auth.Service, handl
 	router.With(auth.Middleware(authService)).Post("/api/food/generate-product-preview", handler.GenerateProductPreview)
 	router.With(auth.Middleware(authService)).Post("/api/food/save-product", handler.SaveProduct)
 	router.With(auth.Middleware(authService)).Delete("/api/food/catalogue/{catalogueId}", handler.DeleteCatalogueEntry)
+	router.With(auth.Middleware(authService)).Post("/api/food/catalogue/{catalogueId}/regenerate-image", handler.RegenerateProductImage)
 }
 
 func (h *CatalogueHandler) SearchCatalogue(w http.ResponseWriter, r *http.Request) {
@@ -168,4 +169,27 @@ func (h *CatalogueHandler) DeleteCatalogueEntry(w http.ResponseWriter, r *http.R
 		h.metrics.Increment(MetricCatalogueEntryDeleted)
 	}
 	legacy.WriteJSON(w, http.StatusOK, map[string]any{"result": true, "data": map[string]any{"catalogueId": catalogueID}})
+}
+
+// RegenerateProductImage answers 202 as soon as the generation is queued; the result reaches
+// clients as a realtime event, since generation takes seconds.
+func (h *CatalogueHandler) RegenerateProductImage(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.UserClaimsFromContext(r.Context())
+	if !ok {
+		legacy.WriteMessage(w, http.StatusUnauthorized, "Unauthorized")
+		return
+	}
+
+	catalogueID, err := strconv.ParseInt(chi.URLParam(r, "catalogueId"), 10, 64)
+	if err != nil {
+		legacy.WriteResultError(w, http.StatusBadRequest, "Invalid catalogueId")
+		return
+	}
+
+	outcome, err := h.service.RegenerateProductImage(r.Context(), claims.UserID, catalogueID)
+	if err != nil {
+		legacy.WriteAppResultError(w, err, http.StatusInternalServerError, "Internal server error")
+		return
+	}
+	legacy.WriteJSON(w, http.StatusAccepted, map[string]any{"result": true, "data": map[string]any{"status": outcome}})
 }

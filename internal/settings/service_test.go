@@ -355,6 +355,9 @@ func TestFoodHeightRoundTrips(t *testing.T) {
 	if food.Height == nil || *food.Height != 185 {
 		t.Fatalf("Height = %v, want 185", food.Height)
 	}
+	if !food.StatsWeightBmiBands {
+		t.Fatalf("StatsWeightBmiBands = false for a stored document without the field, want default true")
+	}
 }
 
 func TestFoodStatsSettingsDefaultsAndRoundTrip(t *testing.T) {
@@ -380,11 +383,15 @@ func TestFoodStatsSettingsDefaultsAndRoundTrip(t *testing.T) {
 	if !slices.Equal(food.StatsAccordionOpenBlocks, wantBlocks) {
 		t.Fatalf("StatsAccordionOpenBlocks = %v, want %v", food.StatsAccordionOpenBlocks, wantBlocks)
 	}
+	if !food.StatsWeightBmiBands {
+		t.Fatalf("StatsWeightBmiBands = false, want true")
+	}
 
 	if _, _, err := service.Put(context.Background(), userID, NamespaceFood, "op-1", rawFields(t, map[string]any{
 		"statsDateRange":           map[string]any{"start": "2026-01-01", "end": "2026-02-01"},
 		"statsTopProductsMetric":   "weight",
 		"statsAccordionOpenBlocks": []string{"streak"},
+		"statsWeightBmiBands":      false,
 	})); err != nil {
 		t.Fatalf("Put() error = %v", err)
 	}
@@ -404,6 +411,15 @@ func TestFoodStatsSettingsDefaultsAndRoundTrip(t *testing.T) {
 	}
 	if !slices.Equal(food.StatsAccordionOpenBlocks, []string{"streak"}) {
 		t.Fatalf("StatsAccordionOpenBlocks = %v, want [streak]", food.StatsAccordionOpenBlocks)
+	}
+	if food.StatsWeightBmiBands {
+		t.Fatalf("StatsWeightBmiBands = true, want false")
+	}
+
+	if _, _, err := service.Put(context.Background(), userID, NamespaceFood, "op-2", rawFields(t, map[string]any{
+		"statsWeightBmiBands": nil,
+	})); !errors.Is(err, ErrInvalidSettingPayload) {
+		t.Fatalf("Put(null statsWeightBmiBands) error = %v, want ErrInvalidSettingPayload", err)
 	}
 }
 

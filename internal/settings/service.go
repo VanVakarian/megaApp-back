@@ -41,12 +41,14 @@ type FoodSettings struct {
 	StatsDateRange           *SavedFoodStatsDateRange `json:"statsDateRange"`
 	StatsTopProductsMetric   string                   `json:"statsTopProductsMetric"`
 	StatsAccordionOpenBlocks []string                 `json:"statsAccordionOpenBlocks"`
+	StatsWeightBmiBands      bool                     `json:"statsWeightBmiBands"`
 }
 
 func defaultFoodSettings() *FoodSettings {
 	return &FoodSettings{
 		StatsTopProductsMetric:   "kcal",
 		StatsAccordionOpenBlocks: []string{"streak", "milestones", "charts", "topProducts"},
+		StatsWeightBmiBands:      true,
 	}
 }
 

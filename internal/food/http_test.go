@@ -493,11 +493,8 @@ func TestGetProductHistoryHTTPResponseShape(t *testing.T) {
 		t.Fatalf("data = %v, want 4-element array", decoded["data"])
 	}
 	first, ok := entries[0].(map[string]any)
-	if !ok || first["dateISO"] != "2026-06-19" || first["foodCatalogueId"] != float64(1) || first["foodWeight"] != float64(440) || first["percentOfNorm"] != float64(10) {
-		t.Fatalf("entries[0] = %+v, want {dateISO:2026-06-19 foodCatalogueId:1 foodWeight:440 percentOfNorm:10}", first)
-	}
-	if _, hasKcal := first["kcal"]; hasKcal {
-		t.Fatalf("entries[0] = %+v, want no kcal field exposed", first)
+	if !ok || first["dateISO"] != "2026-06-19" || first["foodCatalogueId"] != float64(1) || first["foodWeight"] != float64(440) || first["kcal"] != float64(220) || first["percentOfNorm"] != float64(10) {
+		t.Fatalf("entries[0] = %+v, want {dateISO:2026-06-19 foodCatalogueId:1 foodWeight:440 kcal:220 percentOfNorm:10}", first)
 	}
 
 	assertJSONRequestStatus(t, http.MethodGet, server.URL+"/api/food/product-history", session.Cookie, "tab-a", nil, http.StatusBadRequest)

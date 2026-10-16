@@ -247,13 +247,14 @@ func (s *Service) GetPersonalKcalsNow(ctx context.Context, userID int64) (map[in
 
 // ProductHistoryEntry is one consumption event for a tracked product — grams are only ever
 // meaningful together with which catalogue id they belong to, since the list interleaves
-// several tracked products sorted purely by date. Kcal is deliberately not exposed here — the
-// frontend only ever shows grams and percent-of-norm, kcal is purely an intermediate value for
-// computing PercentOfNorm below.
+// several tracked products sorted purely by date. Kcal is the event's calories at the personal
+// per-100g value of its own month: the frontend sums it per day to split the daily-calories
+// chart into tracked products and the rest, while PercentOfNorm is what the history table shows.
 type ProductHistoryEntry struct {
 	DateISO         string  `json:"dateISO"`
 	FoodCatalogueID int64   `json:"foodCatalogueId"`
 	FoodWeight      int64   `json:"foodWeight"`
+	Kcal            int64   `json:"kcal"`
 	PercentOfNorm   float64 `json:"percentOfNorm"`
 }
 
@@ -289,6 +290,7 @@ func (s *Service) GetProductHistory(ctx context.Context, userID int64, catalogue
 			DateISO:         row.DateISO,
 			FoodCatalogueID: row.FoodCatalogueID,
 			FoodWeight:      row.FoodWeight,
+			Kcal:            kcal,
 			PercentOfNorm:   percent,
 		})
 	}

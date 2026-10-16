@@ -885,10 +885,10 @@ func TestServiceGetProductHistoryComputesKcalAndPercent(t *testing.T) {
 		t.Fatalf("GetProductHistory() error = %v", err)
 	}
 	want := []ProductHistoryEntry{
-		{DateISO: "2026-06-19", FoodCatalogueID: 1, FoodWeight: 440, PercentOfNorm: 10},
-		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 176, PercentOfNorm: 4},
-		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 88, PercentOfNorm: 2},
-		{DateISO: "2026-06-16", FoodCatalogueID: 1, FoodWeight: 10, PercentOfNorm: 0},
+		{DateISO: "2026-06-19", FoodCatalogueID: 1, FoodWeight: 440, Kcal: 220, PercentOfNorm: 10},
+		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 176, Kcal: 88, PercentOfNorm: 4},
+		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 88, Kcal: 44, PercentOfNorm: 2},
+		{DateISO: "2026-06-16", FoodCatalogueID: 1, FoodWeight: 10, Kcal: 5, PercentOfNorm: 0},
 	}
 	if len(entries) != len(want) {
 		t.Fatalf("entries = %+v, want %+v", entries, want)

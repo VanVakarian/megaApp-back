@@ -68,47 +68,51 @@ func countDiaryEntries(t *testing.T, db *sql.DB, dateISO string) int {
 	return count
 }
 
-func TestSearchArchiveMode(t *testing.T) {
+func TestSearchScope(t *testing.T) {
 	tests := []struct {
-		name         string
-		userID       int64
-		archived     bool
-		wantApplied  bool
-		wantCatalogs []int64
+		name        string
+		userID      int64
+		scope       SearchScope
+		wantApplied SearchScope
+		wantIDs     []int64
 	}{
-		{name: "normal mode hides archived", userID: regularUserID, archived: false, wantApplied: false, wantCatalogs: []int64{1}},
-		{name: "admin archive mode shows only archived", userID: adminUserID, archived: true, wantApplied: true, wantCatalogs: []int64{archivedItemID}},
-		{name: "non-admin archive request falls back to normal", userID: regularUserID, archived: true, wantApplied: false, wantCatalogs: []int64{1}},
-		{name: "admin normal mode hides archived", userID: adminUserID, archived: false, wantApplied: false, wantCatalogs: []int64{1}},
+		{name: "active scope hides archived", userID: regularUserID, scope: SearchScopeActive, wantApplied: SearchScopeActive, wantIDs: []int64{1}},
+		{name: "admin archived scope shows only archived", userID: adminUserID, scope: SearchScopeArchived, wantApplied: SearchScopeArchived, wantIDs: []int64{archivedItemID}},
+		{name: "non-admin archived request falls back to active", userID: regularUserID, scope: SearchScopeArchived, wantApplied: SearchScopeActive, wantIDs: []int64{1}},
+		{name: "admin active scope hides archived", userID: adminUserID, scope: SearchScopeActive, wantApplied: SearchScopeActive, wantIDs: []int64{1}},
+		{name: "all scope shows archived to a non-admin", userID: regularUserID, scope: SearchScopeAll, wantApplied: SearchScopeAll, wantIDs: []int64{1, archivedItemID}},
+		{name: "all scope shows archived to an admin", userID: adminUserID, scope: SearchScopeAll, wantApplied: SearchScopeAll, wantIDs: []int64{1, archivedItemID}},
+		{name: "missing scope is active", userID: regularUserID, scope: "", wantApplied: SearchScopeActive, wantIDs: []int64{1}},
+		{name: "unknown scope is active", userID: adminUserID, scope: "everything", wantApplied: SearchScopeActive, wantIDs: []int64{1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			service, _ := newArchiveTestService(t)
 
-			ids, applied, err := service.SearchCatalogueRealtime(context.Background(), tt.userID, "apple-semantic", tt.archived)
+			ids, applied, err := service.SearchCatalogueRealtime(context.Background(), tt.userID, "apple-semantic", tt.scope)
 			if err != nil {
 				t.Fatalf("SearchCatalogueRealtime() error = %v", err)
 			}
 			if applied != tt.wantApplied {
-				t.Fatalf("applied = %v, want %v", applied, tt.wantApplied)
+				t.Fatalf("applied = %q, want %q", applied, tt.wantApplied)
 			}
-			if !slices.Equal(ids, tt.wantCatalogs) {
-				t.Fatalf("ids = %v, want %v", ids, tt.wantCatalogs)
+			if !slices.Equal(ids, tt.wantIDs) {
+				t.Fatalf("ids = %v, want %v", ids, tt.wantIDs)
 			}
 		})
 	}
 }
 
-func TestSearchWithoutAdminCheckerIgnoresArchiveMode(t *testing.T) {
+func TestSearchWithoutAdminCheckerIgnoresArchivedScope(t *testing.T) {
 	service, _ := newArchiveTestService(t)
 	service.SetAdminChecker(nil)
 
-	ids, applied, err := service.SearchCatalogueRealtime(context.Background(), adminUserID, "apple-semantic", true)
+	ids, applied, err := service.SearchCatalogueRealtime(context.Background(), adminUserID, "apple-semantic", SearchScopeArchived)
 	if err != nil {
 		t.Fatalf("SearchCatalogueRealtime() error = %v", err)
 	}
-	if applied || !slices.Equal(ids, []int64{1}) {
-		t.Fatalf("ids = %v, applied = %v, want [1], false", ids, applied)
+	if applied != SearchScopeActive || !slices.Equal(ids, []int64{1}) {
+		t.Fatalf("ids = %v, applied = %q, want [1], %q", ids, applied, SearchScopeActive)
 	}
 }
 
@@ -124,33 +128,37 @@ func TestHTTPSearchHidesArchived(t *testing.T) {
 	}
 }
 
-func TestArchiveSearchBypassesResultsCache(t *testing.T) {
-	service, _ := newArchiveTestService(t)
-	ctx := context.Background()
+func TestSearchOfOtherScopesBypassesResultsCache(t *testing.T) {
+	for _, scope := range []SearchScope{SearchScopeArchived, SearchScopeAll} {
+		t.Run(string(scope), func(t *testing.T) {
+			service, _ := newArchiveTestService(t)
+			ctx := context.Background()
 
-	if _, _, err := service.SearchCatalogueRealtime(ctx, adminUserID, "apple-semantic", true); err != nil {
-		t.Fatalf("archive search error = %v", err)
-	}
-	index, err := service.searchIndex.Get(ctx, service.buildSearchIndex)
-	if err != nil {
-		t.Fatalf("searchIndex.Get() error = %v", err)
-	}
-	if cached, ok := index.results.Get("apple-semantic"); ok {
-		t.Fatalf("archive search wrote the results cache: %v", cached)
-	}
+			if _, _, err := service.SearchCatalogueRealtime(ctx, adminUserID, "apple-semantic", scope); err != nil {
+				t.Fatalf("%s search error = %v", scope, err)
+			}
+			index, err := service.searchIndex.Get(ctx, service.buildSearchIndex)
+			if err != nil {
+				t.Fatalf("searchIndex.Get() error = %v", err)
+			}
+			if cached, ok := index.results.Get("apple-semantic"); ok {
+				t.Fatalf("%s search wrote the results cache: %v", scope, cached)
+			}
 
-	if _, _, err := service.SearchCatalogueRealtime(ctx, regularUserID, "apple-semantic", false); err != nil {
-		t.Fatalf("normal search error = %v", err)
-	}
-	ids, applied, err := service.SearchCatalogueRealtime(ctx, adminUserID, "apple-semantic", true)
-	if err != nil {
-		t.Fatalf("archive search after cached normal search error = %v", err)
-	}
-	if !applied || !slices.Equal(ids, []int64{archivedItemID}) {
-		t.Fatalf("archive search = %v (applied %v), want [3] (not the cached normal result)", ids, applied)
-	}
-	if cached, _ := index.results.Get("apple-semantic"); !slices.Equal(cached, []int64{1}) {
-		t.Fatalf("cached normal result = %v, want [1] untouched by archive search", cached)
+			if _, _, err := service.SearchCatalogueRealtime(ctx, regularUserID, "apple-semantic", SearchScopeActive); err != nil {
+				t.Fatalf("active search error = %v", err)
+			}
+			ids, applied, err := service.SearchCatalogueRealtime(ctx, adminUserID, "apple-semantic", scope)
+			if err != nil {
+				t.Fatalf("%s search after cached active search error = %v", scope, err)
+			}
+			if applied != scope || !slices.Contains(ids, archivedItemID) {
+				t.Fatalf("%s search = %v (applied %q), want it to contain [3] (not the cached active result)", scope, ids, applied)
+			}
+			if cached, _ := index.results.Get("apple-semantic"); !slices.Equal(cached, []int64{1}) {
+				t.Fatalf("cached active result = %v, want [1] untouched by %s search", cached, scope)
+			}
+		})
 	}
 }
 
@@ -366,11 +374,11 @@ func TestFoodArchiveOverHTTPAndWS(t *testing.T) {
 	save(regular.Cookie, "op-regular", http.StatusForbidden)
 	save(admin.Cookie, "op-admin", http.StatusOK)
 
-	search := func(cookie string, archived bool) map[string]any {
+	search := func(cookie string, scope SearchScope) map[string]any {
 		conn := dialFoodWS(t, server.URL+"/api/ws?clientId=search", cookie)
 		defer func() { _ = conn.Close() }()
 		drainFoodWSMessage(t, conn)
-		if err := conn.WriteJSON(map[string]any{"type": "SEARCH_QUERY", "query": "apple-semantic", "archived": archived, "sequenceNumber": 1}); err != nil {
+		if err := conn.WriteJSON(map[string]any{"type": "SEARCH_QUERY", "query": "apple-semantic", "scope": scope, "sequenceNumber": 1}); err != nil {
 			t.Fatalf("WriteJSON() error = %v", err)
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -381,12 +389,17 @@ func TestFoodArchiveOverHTTPAndWS(t *testing.T) {
 		return message["payload"].(map[string]any)
 	}
 
-	adminPayload := search(admin.Cookie, true)
-	if adminPayload["archived"] != true || len(adminPayload["catalogueIds"].([]any)) != 2 {
-		t.Fatalf("admin archive search payload = %v, want archived=true with products 1 and 3", adminPayload)
+	// After the admin's save above, products 1 and 3 are both archived.
+	adminPayload := search(admin.Cookie, SearchScopeArchived)
+	if adminPayload["scope"] != string(SearchScopeArchived) || len(adminPayload["catalogueIds"].([]any)) != 2 {
+		t.Fatalf("admin archived search payload = %v, want scope=archived with products 1 and 3", adminPayload)
 	}
-	regularPayload := search(regular.Cookie, true)
-	if regularPayload["archived"] != false || len(regularPayload["catalogueIds"].([]any)) != 0 {
-		t.Fatalf("non-admin archive search payload = %v, want normal mode without archived products", regularPayload)
+	regularPayload := search(regular.Cookie, SearchScopeArchived)
+	if regularPayload["scope"] != string(SearchScopeActive) || len(regularPayload["catalogueIds"].([]any)) != 0 {
+		t.Fatalf("non-admin archived search payload = %v, want the active scope without archived products", regularPayload)
+	}
+	regularAllPayload := search(regular.Cookie, SearchScopeAll)
+	if regularAllPayload["scope"] != string(SearchScopeAll) || len(regularAllPayload["catalogueIds"].([]any)) != 2 {
+		t.Fatalf("non-admin all search payload = %v, want scope=all with products 1 and 3", regularAllPayload)
 	}
 }

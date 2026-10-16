@@ -77,7 +77,7 @@ func TestSearchIndexRanking(t *testing.T) {
 		rows        []SearchIndexRow
 		query       string
 		queryVector []float32
-		archived    bool
+		scope       SearchScope
 		want        []int64
 	}{
 		{
@@ -204,32 +204,45 @@ func TestSearchIndexRanking(t *testing.T) {
 			want:        []int64{1},
 		},
 		{
-			name: "the normal mode skips archived products",
+			name: "the active scope skips archived products",
 			rows: []SearchIndexRow{
 				indexRow(1, "Молоко", false, 0.5, 0.866, 0),
 				indexRow(2, "Молоко старое", true, 0.5, 0.866, 0),
 			},
 			query:       "молоко",
 			queryVector: queryVector,
+			scope:       SearchScopeActive,
 			want:        []int64{1},
 		},
 		{
-			name: "the archive mode returns only archived products",
+			name: "the archived scope returns only archived products",
 			rows: []SearchIndexRow{
 				indexRow(1, "Молоко", false, 0.5, 0.866, 0),
 				indexRow(2, "Молоко старое", true, 0.5, 0.866, 0),
 			},
 			query:       "молоко",
 			queryVector: queryVector,
-			archived:    true,
+			scope:       SearchScopeArchived,
 			want:        []int64{2},
+		},
+		{
+			name: "the all scope ranks active and archived products together",
+			rows: []SearchIndexRow{
+				indexRow(1, "Кефир", false, 0.6, 0.8, 0),
+				indexRow(2, "Молоко старое", true, 0.5, 0.866, 0),
+				indexRow(3, "Молоко", false, 0.5, 0.866, 0),
+			},
+			query:       "молоко",
+			queryVector: queryVector,
+			scope:       SearchScopeAll,
+			want:        []int64{3, 2, 1},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			index := newSearchIndex(tt.rows)
 
-			got := index.search(searchWords(tt.query), tt.queryVector, tt.archived, searchWordLift)
+			got := index.search(searchWords(tt.query), tt.queryVector, tt.scope, searchWordLift)
 
 			if !slices.Equal(got, tt.want) {
 				t.Fatalf("search(%q) = %v, want %v", tt.query, got, tt.want)
@@ -245,7 +258,7 @@ func TestSearchIndexReturnsAtMostThirtyBestProducts(t *testing.T) {
 	}
 	index := newSearchIndex(rows)
 
-	got := index.search(searchWords("молоко"), decodeUnitVector(vectorBlob(1, 0, 0)), false, searchWordLift)
+	got := index.search(searchWords("молоко"), decodeUnitVector(vectorBlob(1, 0, 0)), SearchScopeActive, searchWordLift)
 
 	if len(got) != searchResultLimit {
 		t.Fatalf("len(search()) = %d, want %d", len(got), searchResultLimit)

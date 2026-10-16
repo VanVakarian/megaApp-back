@@ -269,8 +269,8 @@ func TestSearchSeesEveryCatalogueChange(t *testing.T) {
 		if got := searchNames(t, service, "кефир"); slices.Contains(got, "Кефир") {
 			t.Fatalf("SearchCatalogue(кефир) = %v, want the archived product gone", got)
 		}
-		ids, applied, err := service.SearchCatalogueRealtime(ctx, 1, "кефир", true)
-		if err != nil || !applied || !slices.Contains(ids, milkID) {
+		ids, applied, err := service.SearchCatalogueRealtime(ctx, 1, "кефир", SearchScopeArchived)
+		if err != nil || applied != SearchScopeArchived || !slices.Contains(ids, milkID) {
 			t.Fatalf("archive search = %v (applied %v, err %v), want it to contain the archived product", ids, applied, err)
 		}
 	})

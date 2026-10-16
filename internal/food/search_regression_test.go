@@ -117,7 +117,7 @@ func TestSearchRegressionOnProductionCopy(t *testing.T) {
 			}
 
 			checked++
-			ids := index.search(query.words, query.vector, false, wordLift)
+			ids := index.search(query.words, query.vector, SearchScopeActive, wordLift)
 			for rank, id := range ids[:min(5, len(ids))] {
 				if entriesByID[id].matchedWords(stems) > 0 {
 					top5Matches++
@@ -145,7 +145,7 @@ func TestSearchRegressionOnProductionCopy(t *testing.T) {
 	}
 
 	for _, query := range queries[:30] {
-		ids := index.search(query.words, query.vector, false, searchWordLift)
+		ids := index.search(query.words, query.vector, SearchScopeActive, searchWordLift)
 		top := make([]string, 0, 5)
 		for _, id := range ids[:min(5, len(ids))] {
 			top = append(top, entriesByID[id].name)

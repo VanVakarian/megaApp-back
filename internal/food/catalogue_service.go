@@ -24,7 +24,7 @@ type ProductPreviewData struct {
 }
 
 func (s *Service) SearchCatalogue(ctx context.Context, query string) ([]CatalogueEntry, error) {
-	ids, err := s.searchCatalogueIDs(ctx, query, false)
+	ids, err := s.searchCatalogueIDs(ctx, query, SearchScopeActive)
 	if err != nil {
 		return nil, err
 	}
@@ -49,22 +49,30 @@ func (s *Service) SearchCatalogue(ctx context.Context, query string) ([]Catalogu
 	return result, nil
 }
 
-// SearchCatalogueRealtime serves the WS search. The archive mode is applied only for an admin;
-// for anyone else the request silently falls back to the normal mode. The returned flag is the
-// mode actually applied, so the client never mistakes one mode's results for the other's.
-func (s *Service) SearchCatalogueRealtime(ctx context.Context, userID int64, query string, archived bool) ([]int64, bool, error) {
-	if archived {
+// SearchCatalogueRealtime serves the WS search. The archived scope is applied only for an admin, and
+// an unknown scope is the active one: anything else silently falls back to the active scope. The scope
+// "all" is open to everybody, since the whole catalogue, archived products included, is already on every
+// client. The returned scope is the one actually applied, so the client never mistakes the results of
+// one scope for another's.
+func (s *Service) SearchCatalogueRealtime(ctx context.Context, userID int64, query string, scope SearchScope) ([]int64, SearchScope, error) {
+	switch scope {
+	case SearchScopeAll:
+	case SearchScopeArchived:
 		isAdmin, err := s.isAdmin(ctx, userID)
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
-		archived = isAdmin
+		if !isAdmin {
+			scope = SearchScopeActive
+		}
+	default:
+		scope = SearchScopeActive
 	}
-	ids, err := s.searchCatalogueIDs(ctx, query, archived)
+	ids, err := s.searchCatalogueIDs(ctx, query, scope)
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
-	return ids, archived, nil
+	return ids, scope, nil
 }
 
 func (s *Service) isAdmin(ctx context.Context, userID int64) (bool, error) {
@@ -349,10 +357,9 @@ func (s *Service) catalogueChanged() {
 	s.searchIndex.Invalidate()
 }
 
-// searchCatalogueIDs ranks the products of one mode: normal (archived == false) skips archived
-// products, archive mode returns only them. The results cache serves the normal mode only —
-// archive searches are rare, so they neither read nor write it.
-func (s *Service) searchCatalogueIDs(ctx context.Context, query string, archived bool) ([]int64, error) {
+// searchCatalogueIDs ranks the products of one scope. The results cache serves the active scope
+// only — searches of the other scopes are rare, so they neither read nor write it.
+func (s *Service) searchCatalogueIDs(ctx context.Context, query string, scope SearchScope) ([]int64, error) {
 	normalizedQuery := normalizeSearchText(query)
 	if normalizedQuery == "" {
 		return []int64{}, nil
@@ -362,7 +369,8 @@ func (s *Service) searchCatalogueIDs(ctx context.Context, query string, archived
 	if err != nil {
 		return nil, err
 	}
-	if !archived {
+	cacheable := scope == SearchScopeActive
+	if cacheable {
 		if cached, ok := index.results.Get(normalizedQuery); ok {
 			return cached, nil
 		}
@@ -379,8 +387,8 @@ func (s *Service) searchCatalogueIDs(ctx context.Context, query string, archived
 		return nil, err
 	}
 
-	ids := index.search(searchWords(normalizedQuery), queryVector, archived, searchWordLift)
-	if !archived && queryVector != nil {
+	ids := index.search(searchWords(normalizedQuery), queryVector, scope, searchWordLift)
+	if cacheable && queryVector != nil {
 		index.results.Set(normalizedQuery, ids)
 	}
 	return ids, nil

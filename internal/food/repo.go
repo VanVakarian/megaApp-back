@@ -241,7 +241,7 @@ func scanWeightRows(rows *sql.Rows) ([]WeightRow, error) {
 // list — every INSERT is its own row (no per-day merging, see write_repo.go), so this is already
 // event-level, not day-aggregated.
 type ProductHistoryRow struct {
-	DateISO        string
+	DateISO         string
 	FoodCatalogueID int64
 	FoodWeight      int64
 }

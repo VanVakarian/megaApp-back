@@ -19,6 +19,28 @@ const searchResultLimit = 30
 // that range, and a close product with no match can still outrank a distant one with it.
 const searchWordLift = 0.25
 
+// SearchScope is the part of the catalogue a search ranks: the products in use, only the archived
+// ones, or both. The values are the wire names of the WebSocket search.
+type SearchScope string
+
+const (
+	SearchScopeActive   SearchScope = "active"
+	SearchScopeArchived SearchScope = "archived"
+	SearchScopeAll      SearchScope = "all"
+)
+
+// includes reports whether a product with this archive flag belongs to the scope.
+func (s SearchScope) includes(archived bool) bool {
+	switch s {
+	case SearchScopeArchived:
+		return archived
+	case SearchScopeAll:
+		return true
+	default:
+		return !archived
+	}
+}
+
 // searchIndexEntry is one product prepared for search: the words of its name and its two embeddings
 // scaled to unit length, so cosine similarity is a plain dot product.
 type searchIndexEntry struct {
@@ -52,12 +74,12 @@ func newSearchIndex(rows []SearchIndexRow) *searchIndex {
 	return &searchIndex{entries: entries, results: newSearchResultsCache()}
 }
 
-// search ranks the products of one mode (archived or not) for a query. A product is a candidate when a
+// search ranks the products of one scope for a query. A product is a candidate when a
 // query word starts one of its name words or its similarity to the query vector is positive; without a
 // query vector only the first kind remains. Score = similarity + wordLift × the number of query words
 // that start a name word (searchWordLift in production; a parameter so the regression can compare
 // other sizes).
-func (idx *searchIndex) search(queryWords []string, queryVec []float32, archived bool, wordLift float64) []int64 {
+func (idx *searchIndex) search(queryWords []string, queryVec []float32, scope SearchScope, wordLift float64) []int64 {
 	stems := make([]string, 0, len(queryWords))
 	for _, word := range queryWords {
 		stems = append(stems, stemSearchWord(word))
@@ -70,7 +92,7 @@ func (idx *searchIndex) search(queryWords []string, queryVec []float32, archived
 	scored := make([]scoredEntry, 0, len(idx.entries))
 	for i := range idx.entries {
 		entry := &idx.entries[i]
-		if entry.archived != archived {
+		if !scope.includes(entry.archived) {
 			continue
 		}
 		similarity := entry.similarity(queryVec)

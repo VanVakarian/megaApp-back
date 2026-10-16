@@ -950,6 +950,13 @@ func validateCategoryInput(input CategoryInput) (CategoryInput, error) {
 	if input.Hue != nil && (*input.Hue < 0 || *input.Hue > 360) {
 		return CategoryInput{}, legacy.NewError(legacy.ErrorKindValidation, "hue must be between 0 and 360")
 	}
+	// The same limits as the frontend color sliders: below or above them no color is left to tell apart.
+	if input.Lightness != nil && (*input.Lightness < 20 || *input.Lightness > 95) {
+		return CategoryInput{}, legacy.NewError(legacy.ErrorKindValidation, "lightness must be between 20 and 95")
+	}
+	if input.Saturation != nil && (*input.Saturation < 0 || *input.Saturation > 100) {
+		return CategoryInput{}, legacy.NewError(legacy.ErrorKindValidation, "saturation must be between 0 and 100")
+	}
 
 	input.Name = name
 	return input, nil

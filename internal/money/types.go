@@ -66,6 +66,8 @@ type Category struct {
 	CategoryType   CategoryType `json:"categoryType"`
 	HiddenOnCharts bool         `json:"hiddenOnCharts"`
 	Hue            *int64       `json:"hue"`
+	Lightness      *int64       `json:"lightness"`
+	Saturation     *int64       `json:"saturation"`
 }
 
 type Account struct {
@@ -157,6 +159,8 @@ type CategoryInput struct {
 	CategoryType   CategoryType `json:"categoryType"`
 	HiddenOnCharts bool         `json:"hiddenOnCharts"`
 	Hue            *int64       `json:"hue"`
+	Lightness      *int64       `json:"lightness"`
+	Saturation     *int64       `json:"saturation"`
 }
 
 type AccountInput struct {

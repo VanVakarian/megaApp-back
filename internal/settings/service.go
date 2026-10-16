@@ -24,9 +24,19 @@ var ErrInvalidSettingPayload = errors.New("invalid settings payload")
 
 //                                                                          CORE
 
+// PaletteTuning is the user's default lightness and saturation (0-100) for chart category colors
+// in one theme; a category's own values win over it. A nil pointer in CoreSettings means "use the
+// frontend's built-in defaults".
+type PaletteTuning struct {
+	Lightness  int64 `json:"lightness"`
+	Saturation int64 `json:"saturation"`
+}
+
 type CoreSettings struct {
-	SelectedChapterFood  bool `json:"selectedChapterFood"`
-	SelectedChapterMoney bool `json:"selectedChapterMoney"`
+	SelectedChapterFood  bool           `json:"selectedChapterFood"`
+	SelectedChapterMoney bool           `json:"selectedChapterMoney"`
+	ChartPaletteLight    *PaletteTuning `json:"chartPaletteLight"`
+	ChartPaletteDark     *PaletteTuning `json:"chartPaletteDark"`
 }
 
 //                                                                          FOOD

@@ -280,6 +280,53 @@ func TestPutAllowsNullForPointerField(t *testing.T) {
 	}
 }
 
+func TestCoreChartPaletteTuningRoundTripAndReset(t *testing.T) {
+	db := openSettingsTestDB(t)
+	service := newTestService(db)
+	userID := insertSettingsTestUser(t, db, "alice", false)
+
+	getCore := func() CoreSettings {
+		t.Helper()
+		raw, err := service.Get(context.Background(), userID, NamespaceCore)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		var core CoreSettings
+		if err := json.Unmarshal(raw, &core); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		return core
+	}
+
+	if core := getCore(); core.ChartPaletteLight != nil || core.ChartPaletteDark != nil {
+		t.Fatalf("default palette tuning = %v / %v, want nil / nil", core.ChartPaletteLight, core.ChartPaletteDark)
+	}
+
+	tuning := map[string]any{"lightness": 55, "saturation": 80}
+	if _, _, err := service.Put(context.Background(), userID, NamespaceCore, "op-1", rawFields(t, map[string]any{"chartPaletteDark": tuning})); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	core := getCore()
+	if core.ChartPaletteLight != nil {
+		t.Fatalf("ChartPaletteLight = %v, want nil (only dark was set)", core.ChartPaletteLight)
+	}
+	if core.ChartPaletteDark == nil || core.ChartPaletteDark.Lightness != 55 || core.ChartPaletteDark.Saturation != 80 {
+		t.Fatalf("ChartPaletteDark = %v, want {55 80}", core.ChartPaletteDark)
+	}
+
+	if _, _, err := service.Put(context.Background(), userID, NamespaceCore, "op-2", rawFields(t, map[string]any{"chartPaletteDark": nil})); err != nil {
+		t.Fatalf("Put() error = %v, want nil (null resets to the default)", err)
+	}
+	if core := getCore(); core.ChartPaletteDark != nil {
+		t.Fatalf("ChartPaletteDark = %v, want nil after reset", core.ChartPaletteDark)
+	}
+
+	_, _, err := service.Put(context.Background(), userID, NamespaceCore, "op-3", rawFields(t, map[string]any{"chartPaletteLight": map[string]any{"saturation": 1, "brightness": 2}}))
+	if !errors.Is(err, ErrInvalidSettingPayload) {
+		t.Fatalf("Put() error = %v, want ErrInvalidSettingPayload for an unknown tuning field", err)
+	}
+}
+
 // isUserAdmin must never be writable through the generic namespace PUT — it lives on the users
 // table as an authorization flag, not inside userSettings.payload. Allowing it through here would
 // let anyone self-escalate to admin with a single PUT to /api/settings/core.

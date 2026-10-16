@@ -231,6 +231,51 @@ func TestServiceCategoryChartFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestServiceCategoryLightnessAndSaturationRoundTripAndValidation(t *testing.T) {
+	db := openMoneyTestDB(t)
+	insertMoneyTestUser(t, db, 1, "alice")
+	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
+	ctx := context.Background()
+
+	id, err := service.CreateCategory(ctx, 1, CategoryInput{
+		Name:         "Food",
+		CategoryType: CategoryTypeExpense,
+		Hue:          int64Ptr(200),
+		Lightness:    int64Ptr(55),
+		Saturation:   int64Ptr(80),
+	})
+	if err != nil {
+		t.Fatalf("CreateCategory() error = %v", err)
+	}
+	created, err := service.repo.GetCategoryByID(ctx, 1, id)
+	if err != nil || created == nil || created.Lightness == nil || *created.Lightness != 55 || created.Saturation == nil || *created.Saturation != 80 {
+		t.Fatalf("created category = %+v, err = %v", created, err)
+	}
+
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Food", CategoryType: CategoryTypeExpense, Lightness: int64Ptr(20), Saturation: int64Ptr(100)}); err != nil {
+		t.Fatalf("UpdateCategory() bounds error = %v", err)
+	}
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Food", CategoryType: CategoryTypeExpense}); err != nil {
+		t.Fatalf("UpdateCategory() clearing error = %v", err)
+	}
+	cleared, _ := service.repo.GetCategoryByID(ctx, 1, id)
+	if cleared.Lightness != nil || cleared.Saturation != nil {
+		t.Fatalf("cleared category = %+v, want nil lightness and saturation", cleared)
+	}
+
+	if err := service.UpdateCategory(ctx, 1, id, CategoryInput{Name: "Food", CategoryType: CategoryTypeExpense, Lightness: int64Ptr(95), Saturation: int64Ptr(0)}); err != nil {
+		t.Fatalf("UpdateCategory() upper bound error = %v", err)
+	}
+	for _, value := range []int64{-1, 19, 96, 101} {
+		_, err := service.CreateCategory(ctx, 1, CategoryInput{Name: "A", CategoryType: CategoryTypeExpense, Lightness: int64Ptr(value)})
+		assertMoneyValidationError(t, err, "lightness must be between 20 and 95")
+	}
+	for _, value := range []int64{-1, 101} {
+		_, err := service.CreateCategory(ctx, 1, CategoryInput{Name: "B", CategoryType: CategoryTypeExpense, Saturation: int64Ptr(value)})
+		assertMoneyValidationError(t, err, "saturation must be between 0 and 100")
+	}
+}
+
 func TestServiceCategoryHueValidation(t *testing.T) {
 	db := openMoneyTestDB(t)
 	insertMoneyTestUser(t, db, 1, "alice")
@@ -1005,6 +1050,8 @@ func openMoneyTestDB(t *testing.T) *sql.DB {
 			categoryType TEXT NOT NULL,
 			hiddenOnCharts INTEGER NOT NULL DEFAULT 0,
 			hue INTEGER CHECK(hue IS NULL OR hue BETWEEN 0 AND 360),
+			lightness INTEGER CHECK(lightness IS NULL OR lightness BETWEEN 0 AND 100),
+			saturation INTEGER CHECK(saturation IS NULL OR saturation BETWEEN 0 AND 100),
 			FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
 			FOREIGN KEY (parentId) REFERENCES moneyCategories(id) ON DELETE RESTRICT
 		);

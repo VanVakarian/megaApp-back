@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const productHistoryMaxCatalogueIDs = 20
+
 type Handler struct {
 	service  *Service
 	realtime RealtimePublisher
@@ -152,29 +154,12 @@ func (h *Handler) GetProductHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	limit := productHistoryDefaultLimit
-	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
-		parsedLimit, err := strconv.Atoi(rawLimit)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"result": false, "error": "Invalid limit"})
-			return
-		}
-		limit = parsedLimit
+	if len(catalogueIDs) > productHistoryMaxCatalogueIDs {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"result": false, "error": "Too many catalogueIds"})
+		return
 	}
 
-	var cursor *ProductHistoryCursor
-	cursorDate := strings.TrimSpace(r.URL.Query().Get("cursorDate"))
-	cursorID := strings.TrimSpace(r.URL.Query().Get("cursorId"))
-	if cursorDate != "" && cursorID != "" {
-		parsedCursorID, err := strconv.ParseInt(cursorID, 10, 64)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"result": false, "error": "Invalid cursorId"})
-			return
-		}
-		cursor = &ProductHistoryCursor{DateISO: cursorDate, ID: parsedCursorID}
-	}
-
-	response, err := h.service.GetProductHistory(r.Context(), claims.UserID, catalogueIDs, cursor, limit)
+	response, err := h.service.GetProductHistory(r.Context(), claims.UserID, catalogueIDs)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"result": false, "error": err.Error()})
 		return

@@ -241,40 +241,32 @@ func scanWeightRows(rows *sql.Rows) ([]WeightRow, error) {
 // list — every INSERT is its own row (no per-day merging, see write_repo.go), so this is already
 // event-level, not day-aggregated.
 type ProductHistoryRow struct {
-	ID              int64
-	DateISO         string
+	DateISO        string
 	FoodCatalogueID int64
 	FoodWeight      int64
 }
 
-// GetProductHistory returns up to `limit` foodDiary rows for the given catalogue ids, newest
-// first (dateISO DESC, id DESC), continuing after `cursor` when given.
-func (r *Repository) GetProductHistory(ctx context.Context, userID int64, catalogueIDs []int64, cursor *ProductHistoryCursor, limit int) ([]ProductHistoryRow, error) {
+// GetProductHistory returns every foodDiary row for the given catalogue ids, newest first
+// (dateISO DESC, id DESC).
+func (r *Repository) GetProductHistory(ctx context.Context, userID int64, catalogueIDs []int64) ([]ProductHistoryRow, error) {
 	if len(catalogueIDs) == 0 {
 		return []ProductHistoryRow{}, nil
 	}
 
 	placeholders := make([]string, 0, len(catalogueIDs))
-	args := make([]any, 0, len(catalogueIDs)+4)
+	args := make([]any, 0, len(catalogueIDs)+1)
 	args = append(args, userID)
 	for _, id := range catalogueIDs {
 		placeholders = append(placeholders, "?")
 		args = append(args, id)
 	}
 
-	query := `
-		SELECT id, dateISO, foodCatalogueId, foodWeight
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT dateISO, foodCatalogueId, foodWeight
 		FROM foodDiary
-		WHERE usersId = ? AND foodCatalogueId IN (` + strings.Join(placeholders, ",") + `)
-	`
-	if cursor != nil {
-		query += " AND (dateISO < ? OR (dateISO = ? AND id < ?))"
-		args = append(args, cursor.DateISO, cursor.DateISO, cursor.ID)
-	}
-	query += " ORDER BY dateISO DESC, id DESC LIMIT ?"
-	args = append(args, limit)
-
-	rows, err := r.db.QueryContext(ctx, query, args...)
+		WHERE usersId = ? AND foodCatalogueId IN (`+strings.Join(placeholders, ",")+`)
+		ORDER BY dateISO DESC, id DESC
+	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("get product history: %w", err)
 	}
@@ -283,7 +275,7 @@ func (r *Repository) GetProductHistory(ctx context.Context, userID int64, catalo
 	result := make([]ProductHistoryRow, 0)
 	for rows.Next() {
 		var row ProductHistoryRow
-		if err := rows.Scan(&row.ID, &row.DateISO, &row.FoodCatalogueID, &row.FoodWeight); err != nil {
+		if err := rows.Scan(&row.DateISO, &row.FoodCatalogueID, &row.FoodWeight); err != nil {
 			return nil, fmt.Errorf("scan product history row: %w", err)
 		}
 		result = append(result, row)

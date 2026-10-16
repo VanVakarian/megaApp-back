@@ -245,19 +245,8 @@ func (s *Service) GetPersonalKcalsNow(ctx context.Context, userID int64) (map[in
 	return resolver.AppliedKcalsNow(currentYearMonth), nil
 }
 
-const productHistoryDefaultLimit = 30
-const productHistoryMaxLimit = 100
-
-// ProductHistoryCursor marks a position in the product-history feed (the (dateISO, id) of the
-// last row already delivered) — sent back to the client as NextCursor and echoed back on the
-// following page request. Shared as-is between the repository query param and the API response.
-type ProductHistoryCursor struct {
-	DateISO string `json:"dateISO"`
-	ID      int64  `json:"id"`
-}
-
 // ProductHistoryEntry is one consumption event for a tracked product — grams are only ever
-// meaningful together with which catalogue id they belong to, since a page can interleave
+// meaningful together with which catalogue id they belong to, since the list interleaves
 // several tracked products sorted purely by date. Kcal is deliberately not exposed here — the
 // frontend only ever shows grams and percent-of-norm, kcal is purely an intermediate value for
 // computing PercentOfNorm below.
@@ -268,39 +257,23 @@ type ProductHistoryEntry struct {
 	PercentOfNorm   float64 `json:"percentOfNorm"`
 }
 
-type ProductHistoryPage struct {
-	Entries    []ProductHistoryEntry `json:"entries"`
-	NextCursor *ProductHistoryCursor `json:"nextCursor,omitempty"`
-}
-
-// GetProductHistory answers "every time the user ate any of these products, newest first" — no
-// caching, a live query on every call (unlike GetCatalogue/GetStats), since the tracked-product
+// GetProductHistory answers "every time the user ate any of these products, newest first" in one
+// unpaged response — a single user's whole history of a product is at most a few thousand rows.
+// No caching, a live query on every call (unlike GetCatalogue/GetStats), since the tracked-product
 // set changes on every add/remove and stale results would be actively wrong here.
-func (s *Service) GetProductHistory(ctx context.Context, userID int64, catalogueIDs []int64, cursor *ProductHistoryCursor, limit int) (ProductHistoryPage, error) {
-	if limit <= 0 {
-		limit = productHistoryDefaultLimit
-	}
-	if limit > productHistoryMaxLimit {
-		limit = productHistoryMaxLimit
-	}
+func (s *Service) GetProductHistory(ctx context.Context, userID int64, catalogueIDs []int64) ([]ProductHistoryEntry, error) {
 	if len(catalogueIDs) == 0 {
-		return ProductHistoryPage{Entries: []ProductHistoryEntry{}}, nil
+		return []ProductHistoryEntry{}, nil
 	}
 
-	// Fetch one extra row to know whether a next page exists without a separate COUNT query.
-	rows, err := s.repo.GetProductHistory(ctx, userID, catalogueIDs, cursor, limit+1)
+	rows, err := s.repo.GetProductHistory(ctx, userID, catalogueIDs)
 	if err != nil {
-		return ProductHistoryPage{}, err
-	}
-
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+		return nil, err
 	}
 
 	resolver, _, err := s.buildPersonalKcalResolver(ctx, userID)
 	if err != nil {
-		return ProductHistoryPage{}, err
+		return nil, err
 	}
 
 	entries := make([]ProductHistoryEntry, 0, len(rows))
@@ -320,12 +293,7 @@ func (s *Service) GetProductHistory(ctx context.Context, userID int64, catalogue
 		})
 	}
 
-	page := ProductHistoryPage{Entries: entries}
-	if hasMore && len(rows) > 0 {
-		last := rows[len(rows)-1]
-		page.NextCursor = &ProductHistoryCursor{DateISO: last.DateISO, ID: last.ID}
-	}
-	return page, nil
+	return entries, nil
 }
 
 func (s *Service) GetDiaryFullUpdate(ctx context.Context, userID int64, dateISO string, offsetDays int) (map[string]DiaryDay, error) {

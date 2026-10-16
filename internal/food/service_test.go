@@ -829,40 +829,29 @@ func seedProductHistoryRows(t *testing.T, db *sql.DB) {
 	}
 }
 
-func TestRepositoryGetProductHistoryKeysetPaginationAcrossProducts(t *testing.T) {
+func TestRepositoryGetProductHistoryOrdersAcrossProducts(t *testing.T) {
 	db := openFoodTestDB(t)
 	seedProductHistoryRows(t, db)
 	repo := NewRepository(db, sqlite.WriteDB{DB: db})
 	ctx := context.Background()
 
-	// Both catalogue ids, newest first: id22(06-19) id21(06-18) id20(06-18) id10(06-17,Bread)
-	// id23(06-16) — same-day rows (21,20) must break ties by id DESC, not insertion order alone.
-	page1, err := repo.GetProductHistory(ctx, 1, []int64{1, 2}, nil, 2)
+	// Every seeded row has a distinct weight, so weights identify rows. Both catalogue ids, newest
+	// first: 440g(06-19) 176g(06-18, id21) 88g(06-18, id20) 100g(06-17, Bread) 10g(06-16) —
+	// same-day rows must break ties by id DESC, not insertion order alone.
+	both, err := repo.GetProductHistory(ctx, 1, []int64{1, 2})
 	if err != nil {
-		t.Fatalf("GetProductHistory() page1 error = %v", err)
+		t.Fatalf("GetProductHistory() both error = %v", err)
 	}
-	assertProductHistoryIDs(t, page1, []int64{22, 21})
-
-	page2, err := repo.GetProductHistory(ctx, 1, []int64{1, 2}, &ProductHistoryCursor{DateISO: page1[1].DateISO, ID: page1[1].ID}, 2)
-	if err != nil {
-		t.Fatalf("GetProductHistory() page2 error = %v", err)
-	}
-	assertProductHistoryIDs(t, page2, []int64{20, 10})
-
-	page3, err := repo.GetProductHistory(ctx, 1, []int64{1, 2}, &ProductHistoryCursor{DateISO: page2[1].DateISO, ID: page2[1].ID}, 2)
-	if err != nil {
-		t.Fatalf("GetProductHistory() page3 error = %v", err)
-	}
-	assertProductHistoryIDs(t, page3, []int64{23})
+	assertProductHistoryWeights(t, both, []int64{440, 176, 88, 100, 10})
 
 	// A single catalogue id excludes the other product entirely, no cross-contamination.
-	appleOnly, err := repo.GetProductHistory(ctx, 1, []int64{1}, nil, 10)
+	appleOnly, err := repo.GetProductHistory(ctx, 1, []int64{1})
 	if err != nil {
 		t.Fatalf("GetProductHistory() apple-only error = %v", err)
 	}
-	assertProductHistoryIDs(t, appleOnly, []int64{22, 21, 20, 23})
+	assertProductHistoryWeights(t, appleOnly, []int64{440, 176, 88, 10})
 
-	empty, err := repo.GetProductHistory(ctx, 1, nil, nil, 10)
+	empty, err := repo.GetProductHistory(ctx, 1, nil)
 	if err != nil {
 		t.Fatalf("GetProductHistory() empty ids error = %v", err)
 	}
@@ -871,78 +860,56 @@ func TestRepositoryGetProductHistoryKeysetPaginationAcrossProducts(t *testing.T)
 	}
 }
 
-func assertProductHistoryIDs(t *testing.T, rows []ProductHistoryRow, wantIDs []int64) {
+func assertProductHistoryWeights(t *testing.T, rows []ProductHistoryRow, wantWeights []int64) {
 	t.Helper()
-	if len(rows) != len(wantIDs) {
-		t.Fatalf("len(rows) = %d, want %d (rows=%+v)", len(rows), len(wantIDs), rows)
+	if len(rows) != len(wantWeights) {
+		t.Fatalf("len(rows) = %d, want %d (rows=%+v)", len(rows), len(wantWeights), rows)
 	}
-	for i, want := range wantIDs {
-		if rows[i].ID != want {
-			t.Fatalf("rows[%d].ID = %d, want %d (rows=%+v)", i, rows[i].ID, want, rows)
+	for i, want := range wantWeights {
+		if rows[i].FoodWeight != want {
+			t.Fatalf("rows[%d].FoodWeight = %d, want %d (rows=%+v)", i, rows[i].FoodWeight, want, rows)
 		}
 	}
 }
 
-func TestServiceGetProductHistoryComputesKcalAndPercentAndPaginates(t *testing.T) {
+func TestServiceGetProductHistoryComputesKcalAndPercent(t *testing.T) {
 	db := openFoodTestDB(t)
 	seedProductHistoryRows(t, db)
 	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
-	ctx := context.Background()
 
 	// No personalKcalHistory/personalNormHistory rows seeded, so Apple stays at its catalogue
 	// default (50 kcal/100g) and the norm stays at the package default (2200) for every month —
 	// weights were chosen so kcal and percent both land on exact integers (no rounding ambiguity).
-	page1, err := service.GetProductHistory(ctx, 1, []int64{1}, nil, 2)
-	if err != nil {
-		t.Fatalf("GetProductHistory() page1 error = %v", err)
-	}
-	wantPage1 := []ProductHistoryEntry{
-		{DateISO: "2026-06-19", FoodCatalogueID: 1, FoodWeight: 440, PercentOfNorm: 10},
-		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 176, PercentOfNorm: 4},
-	}
-	if len(page1.Entries) != len(wantPage1) {
-		t.Fatalf("page1.Entries = %+v, want %+v", page1.Entries, wantPage1)
-	}
-	for i, want := range wantPage1 {
-		if page1.Entries[i] != want {
-			t.Fatalf("page1.Entries[%d] = %+v, want %+v", i, page1.Entries[i], want)
-		}
-	}
-	if page1.NextCursor == nil || page1.NextCursor.DateISO != "2026-06-18" || page1.NextCursor.ID != 21 {
-		t.Fatalf("page1.NextCursor = %+v, want {2026-06-18 21}", page1.NextCursor)
-	}
-
-	page2, err := service.GetProductHistory(ctx, 1, []int64{1}, page1.NextCursor, 2)
-	if err != nil {
-		t.Fatalf("GetProductHistory() page2 error = %v", err)
-	}
-	wantPage2 := []ProductHistoryEntry{
-		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 88, PercentOfNorm: 2},
-		{DateISO: "2026-06-16", FoodCatalogueID: 1, FoodWeight: 10, PercentOfNorm: 0},
-	}
-	if len(page2.Entries) != len(wantPage2) {
-		t.Fatalf("page2.Entries = %+v, want %+v", page2.Entries, wantPage2)
-	}
-	for i, want := range wantPage2 {
-		if page2.Entries[i] != want {
-			t.Fatalf("page2.Entries[%d] = %+v, want %+v", i, page2.Entries[i], want)
-		}
-	}
-	if page2.NextCursor != nil {
-		t.Fatalf("page2.NextCursor = %+v, want nil (last page)", page2.NextCursor)
-	}
-}
-
-func TestServiceGetProductHistoryEmptyCatalogueIDsReturnsEmptyPage(t *testing.T) {
-	db := openFoodTestDB(t)
-	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
-
-	page, err := service.GetProductHistory(context.Background(), 1, nil, nil, 10)
+	entries, err := service.GetProductHistory(context.Background(), 1, []int64{1})
 	if err != nil {
 		t.Fatalf("GetProductHistory() error = %v", err)
 	}
-	if len(page.Entries) != 0 || page.NextCursor != nil {
-		t.Fatalf("GetProductHistory() with no ids = %+v, want empty page", page)
+	want := []ProductHistoryEntry{
+		{DateISO: "2026-06-19", FoodCatalogueID: 1, FoodWeight: 440, PercentOfNorm: 10},
+		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 176, PercentOfNorm: 4},
+		{DateISO: "2026-06-18", FoodCatalogueID: 1, FoodWeight: 88, PercentOfNorm: 2},
+		{DateISO: "2026-06-16", FoodCatalogueID: 1, FoodWeight: 10, PercentOfNorm: 0},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("entries = %+v, want %+v", entries, want)
+	}
+	for i := range want {
+		if entries[i] != want[i] {
+			t.Fatalf("entries[%d] = %+v, want %+v", i, entries[i], want[i])
+		}
+	}
+}
+
+func TestServiceGetProductHistoryEmptyCatalogueIDsReturnsEmptyList(t *testing.T) {
+	db := openFoodTestDB(t)
+	service := NewService(NewRepository(db, sqlite.WriteDB{DB: db}), idempotency.NewStore(sqlite.WriteDB{DB: db}))
+
+	entries, err := service.GetProductHistory(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatalf("GetProductHistory() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("GetProductHistory() with no ids = %+v, want empty list", entries)
 	}
 }
 
